@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "453107428098",
+    "project_id": "x-medic",
+    "storage_bucket": "x-medic.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:453107428098:android:de7c57dce55087cf35b01b",
+        "android_client_info": {
+          "package_name": "com.example.xmedic_v100"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "453107428098-k4gm042nljq343v3hr8vfcmh5240c7l3.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.xmedic_v100",
+            "certificate_hash": "944245166887bf495a9cb4122faa6e7577eb939e"
+          }
+        },
+        {
+          "client_id": "453107428098-gne4h6a2ddo2q1lutc2vqs9kq5o04qto.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDcccZiP_tFHzTUZGfX5VrmQc-7OjHxL-4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "453107428098-gne4h6a2ddo2q1lutc2vqs9kq5o04qto.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
