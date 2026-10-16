@@ -16,6 +16,12 @@ import kotlinx.coroutines.launch
 sealed interface RegisterUiState {
     object Idle : RegisterUiState
     object Loading : RegisterUiState
+    data class GoogleVerifiedNeedsPassword(
+        val googleUser: FirebaseUser,
+        val email: String,
+        val name: String,
+        val message: String = "Cuenta de Google verificada. Ingresa tu contraseña y pulsa 'Registrarme' para habilitar ambos accesos (Google y Correo/Contraseña)."
+    ) : RegisterUiState
     data class Success(val user: FirebaseUser?) : RegisterUiState
     data class Error(val message: String) : RegisterUiState
 }
@@ -30,6 +36,8 @@ open class RegisterViewModel(
     private val _uiState = MutableStateFlow<RegisterUiState>(RegisterUiState.Idle)
     val uiState: StateFlow<RegisterUiState> = _uiState.asStateFlow()
 
+    private var pendingGoogleUser: FirebaseUser? = null
+
     fun registerUser(
         fullName: String,
         email: String,
@@ -40,7 +48,6 @@ open class RegisterViewModel(
     ) {
         val trimmedName = fullName.trim()
         val trimmedEmail = email.trim()
-        val trimmedPhone = phone.trim()
         val trimmedPassword = password.trim()
         val trimmedConfirmPassword = confirmPassword.trim()
 
@@ -76,6 +83,20 @@ open class RegisterViewModel(
 
         viewModelScope.launch {
             _uiState.value = RegisterUiState.Loading
+
+            val googleUser = pendingGoogleUser
+            if (googleUser != null) {
+                // El usuario se autenticó previamente con Google; vinculamos contraseña y nombre
+                authRepository.linkPasswordAndProfileToUser(
+                    user = googleUser,
+                    password = trimmedPassword,
+                    displayName = trimmedName
+                )
+                _uiState.value = RegisterUiState.Success(googleUser)
+                return@launch
+            }
+
+            // Registro tradicional con correo y contraseña
             val result = authRepository.createUserWithEmail(
                 email = trimmedEmail,
                 password = trimmedPassword,
@@ -125,13 +146,27 @@ open class RegisterViewModel(
             result.fold(
                 onSuccess = { user ->
                     if (user != null) {
-                        authRepository.linkPasswordAndProfileToUser(
-                            user = user,
-                            password = password.trim(),
-                            displayName = fullName.trim()
-                        )
+                        pendingGoogleUser = user
+                        val userEmail = user.email ?: ""
+                        val userName = fullName.ifBlank { user.displayName ?: "" }
+
+                        if (password.isNotBlank() && password.length >= 6) {
+                            authRepository.linkPasswordAndProfileToUser(
+                                user = user,
+                                password = password.trim(),
+                                displayName = userName
+                            )
+                            _uiState.value = RegisterUiState.Success(user)
+                        } else {
+                            _uiState.value = RegisterUiState.GoogleVerifiedNeedsPassword(
+                                googleUser = user,
+                                email = userEmail,
+                                name = userName
+                            )
+                        }
+                    } else {
+                        _uiState.value = RegisterUiState.Error("No se pudo obtener el usuario de Google")
                     }
-                    _uiState.value = RegisterUiState.Success(user)
                 },
                 onFailure = { error ->
                     val msg = error.localizedMessage ?: ""
@@ -162,6 +197,7 @@ open class RegisterViewModel(
     }
 
     fun resetState() {
+        pendingGoogleUser = null
         _uiState.value = RegisterUiState.Idle
     }
 }

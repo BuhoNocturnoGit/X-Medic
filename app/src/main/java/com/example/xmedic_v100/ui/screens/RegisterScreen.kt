@@ -79,10 +79,16 @@ fun RegisterScreen(
     val scrollState = rememberScrollState()
 
     LaunchedEffect(uiState) {
-        when (uiState) {
+        when (val state = uiState) {
             is RegisterUiState.Success -> {
                 onRegisterSuccess()
                 viewModel.resetState()
+            }
+            is RegisterUiState.GoogleVerifiedNeedsPassword -> {
+                email = state.email
+                if (fullName.isBlank()) {
+                    fullName = state.name
+                }
             }
             else -> {}
         }
@@ -146,7 +152,7 @@ fun RegisterScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // Banner para mostrar mensajes de Error
+            // Banner para mostrar mensajes de Error o Verificación Google
             when (val state = uiState) {
                 is RegisterUiState.Error -> {
                     Box(
@@ -160,6 +166,25 @@ fun RegisterScreen(
                         Text(
                             text = state.message,
                             color = Color(0xFFDC2626),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+                is RegisterUiState.GoogleVerifiedNeedsPassword -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 16.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0xFFDCFCE7))
+                            .padding(12.dp)
+                    ) {
+                        Text(
+                            text = state.message,
+                            color = Color(0xFF16A34A),
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium,
                             textAlign = TextAlign.Center,
