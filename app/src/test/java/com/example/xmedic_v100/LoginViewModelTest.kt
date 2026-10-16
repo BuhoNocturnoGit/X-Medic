@@ -69,7 +69,7 @@ class LoginViewModelTest {
         context = android.content.ContextWrapper(null),
         firebaseAuthSupplier = { null }
     ) {
-        override suspend fun signInWithFirebaseToken(idToken: String) = Result.failure<com.google.firebase.auth.FirebaseUser>(
+        override suspend fun signInWithFirebaseToken(idToken: String, onlyExistingAccount: Boolean) = Result.failure<com.google.firebase.auth.FirebaseUser>(
             IllegalStateException("Firebase Auth no inicializado")
         )
     }

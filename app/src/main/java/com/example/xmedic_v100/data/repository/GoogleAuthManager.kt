@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.credentials.CredentialManager
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.GetCredentialResponse
+import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
@@ -33,8 +34,12 @@ open class GoogleAuthManager(
 
     /**
      * Inicia sesión utilizando Android Credential Manager y solicita la credencial de Google.
+     * @param onlyExistingAccount Si es true, exige que la cuenta de Google ya exista en Firebase Auth.
      */
-    open suspend fun signInWithCredentialManager(webClientId: String): Result<FirebaseUser> {
+    open suspend fun signInWithCredentialManager(
+        webClientId: String,
+        onlyExistingAccount: Boolean = false
+    ): Result<FirebaseUser> {
         return try {
             val googleIdOption = GetGoogleIdOption.Builder()
                 .setFilterByAuthorizedAccounts(false)
@@ -55,7 +60,9 @@ open class GoogleAuthManager(
             val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(credential.data)
             val idToken = googleIdTokenCredential.idToken
 
-            signInWithFirebaseToken(idToken)
+            signInWithFirebaseToken(idToken, onlyExistingAccount)
+        } catch (e: GetCredentialCancellationException) {
+            Result.failure(e)
         } catch (e: GetCredentialException) {
             Result.failure(e)
         } catch (e: Exception) {
@@ -77,17 +84,23 @@ open class GoogleAuthManager(
     /**
      * Procesa la cuenta obtenida de GoogleSignInAccount para autenticar contra Firebase.
      */
-    open suspend fun signInWithGoogleAccount(account: GoogleSignInAccount): Result<FirebaseUser> {
+    open suspend fun signInWithGoogleAccount(
+        account: GoogleSignInAccount,
+        onlyExistingAccount: Boolean = false
+    ): Result<FirebaseUser> {
         val idToken = account.idToken ?: return Result.failure(
             IllegalArgumentException("No se encontró el ID Token en la cuenta de Google")
         )
-        return signInWithFirebaseToken(idToken)
+        return signInWithFirebaseToken(idToken, onlyExistingAccount)
     }
 
     /**
      * Autentica el token de ID de Google en Firebase Auth usando GoogleAuthProvider.
      */
-    open suspend fun signInWithFirebaseToken(idToken: String): Result<FirebaseUser> {
+    open suspend fun signInWithFirebaseToken(
+        idToken: String,
+        onlyExistingAccount: Boolean = false
+    ): Result<FirebaseUser> {
         return try {
             val firebaseAuth = firebaseAuthSupplier()
                 ?: return Result.failure(IllegalStateException("Firebase Auth no está inicializado"))
@@ -95,6 +108,22 @@ open class GoogleAuthManager(
             val credential = GoogleAuthProvider.getCredential(idToken, null)
             val authResult = firebaseAuth.signInWithCredential(credential).await()
             val user = authResult.user
+
+            val isNewUser = authResult.additionalUserInfo?.isNewUser == true
+
+            if (onlyExistingAccount && isNewUser) {
+                // Si estamos en la pestaña Iniciar Sesión y la cuenta de Google no existía previamente:
+                try {
+                    user?.delete()?.await()
+                } catch (_: Exception) {}
+                try {
+                    firebaseAuth.signOut()
+                } catch (_: Exception) {}
+
+                return Result.failure(
+                    IllegalStateException("No existe una cuenta registrada con este correo de Google. Por favor, pulsa 'Crear cuenta' para registrarte primero.")
+                )
+            }
 
             if (user != null) {
                 Result.success(user)

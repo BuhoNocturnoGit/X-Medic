@@ -178,7 +178,8 @@ open class LoginViewModel(
 
             val result =
                 googleAuthManager.signInWithCredentialManager(
-                    webClientId
+                    webClientId = webClientId,
+                    onlyExistingAccount = true
                 )
 
             result.fold(
