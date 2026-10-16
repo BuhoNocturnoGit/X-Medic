@@ -173,7 +173,11 @@ fun RegisterScreen(
             // Botón Social Google
             GoogleSignInButton(
                 onClick = {
-                    viewModel.performGoogleSignIn(context)
+                    viewModel.performGoogleSignIn(
+                        context = context,
+                        fullName = fullName,
+                        password = password
+                    )
                 },
                 modifier = Modifier.fillMaxWidth()
             )

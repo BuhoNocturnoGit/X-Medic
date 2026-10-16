@@ -106,17 +106,31 @@ open class RegisterViewModel(
         }
     }
 
-    fun performGoogleSignIn(context: Context) {
+    fun performGoogleSignIn(
+        context: Context,
+        fullName: String = "",
+        password: String = ""
+    ) {
         val webClientId = "453107428098-gne4h6a2ddo2q1lutc2vqs9kq5o04qto.apps.googleusercontent.com"
 
         viewModelScope.launch {
             _uiState.value = RegisterUiState.Loading
 
             val googleAuthManager = googleAuthManagerSupplier(context)
-            val result = googleAuthManager.signInWithCredentialManager(webClientId)
+            val result = googleAuthManager.signInWithCredentialManager(
+                webClientId = webClientId,
+                onlyExistingAccount = false
+            )
 
             result.fold(
                 onSuccess = { user ->
+                    if (user != null) {
+                        authRepository.linkPasswordAndProfileToUser(
+                            user = user,
+                            password = password.trim(),
+                            displayName = fullName.trim()
+                        )
+                    }
                     _uiState.value = RegisterUiState.Success(user)
                 },
                 onFailure = { error ->

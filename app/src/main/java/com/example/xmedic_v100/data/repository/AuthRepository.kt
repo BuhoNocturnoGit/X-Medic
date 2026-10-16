@@ -87,6 +87,42 @@ open class AuthRepository(
     }
 
     /**
+     * Vincula un nombre de usuario y/o contraseña a la cuenta de usuario actual.
+     */
+    open suspend fun linkPasswordAndProfileToUser(
+        user: FirebaseUser,
+        password: String = "",
+        displayName: String = ""
+    ): Result<FirebaseUser> {
+        return try {
+            if (displayName.isNotBlank()) {
+                try {
+                    val profileUpdates = com.google.firebase.auth.UserProfileChangeRequest.Builder()
+                        .setDisplayName(displayName)
+                        .build()
+                    user.updateProfile(profileUpdates).await()
+                } catch (_: Exception) {}
+            }
+
+            if (password.isNotBlank() && password.length >= 6) {
+                try {
+                    val email = user.email
+                    if (!email.isNullOrBlank()) {
+                        val credential = com.google.firebase.auth.EmailAuthProvider.getCredential(email, password)
+                        user.linkWithCredential(credential).await()
+                    }
+                } catch (_: Exception) {
+                    // Si ya está vinculado o la contraseña ya existe
+                }
+            }
+
+            Result.success(user)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Envía un correo electrónico de restablecimiento de contraseña.
      */
     open suspend fun sendPasswordReset(email: String): Result<Unit> {
