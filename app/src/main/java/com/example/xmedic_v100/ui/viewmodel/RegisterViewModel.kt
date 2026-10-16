@@ -120,9 +120,20 @@ open class RegisterViewModel(
                     _uiState.value = RegisterUiState.Success(user)
                 },
                 onFailure = { error ->
-                    _uiState.value = RegisterUiState.Error(
-                        error.localizedMessage ?: "Error al autenticar con Google"
-                    )
+                    val msg = error.localizedMessage ?: ""
+                    if (error is androidx.credentials.exceptions.GetCredentialCancellationException ||
+                        msg.contains("cancel", ignoreCase = true)
+                    ) {
+                        _uiState.value = RegisterUiState.Idle
+                    } else if (msg.contains("No credentials available", ignoreCase = true)) {
+                        _uiState.value = RegisterUiState.Error(
+                            "No hay cuentas de Google registradas en este dispositivo. Añade una cuenta en los Ajustes de tu teléfono."
+                        )
+                    } else {
+                        _uiState.value = RegisterUiState.Error(
+                            error.localizedMessage ?: "Error al autenticar con Google"
+                        )
+                    }
                 }
             )
         }

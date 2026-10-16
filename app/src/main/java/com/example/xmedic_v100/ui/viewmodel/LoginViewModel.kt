@@ -187,11 +187,22 @@ open class LoginViewModel(
                         LoginUiState.Success(user)
                 },
                 onFailure = { error ->
-                    _uiState.value =
-                        LoginUiState.Error(
+                    val msg = error.localizedMessage ?: ""
+                    if (error is androidx.credentials.exceptions.GetCredentialCancellationException ||
+                        msg.contains("cancel", ignoreCase = true)
+                    ) {
+                        // El usuario canceló la selección de cuenta -> Permanecer en la pantalla en estado Idle
+                        _uiState.value = LoginUiState.Idle
+                    } else if (msg.contains("No credentials available", ignoreCase = true)) {
+                        _uiState.value = LoginUiState.Error(
+                            "No hay cuentas de Google registradas en este dispositivo. Añade una cuenta en los Ajustes de tu teléfono."
+                        )
+                    } else {
+                        _uiState.value = LoginUiState.Error(
                             error.localizedMessage
                                 ?: "Error al autenticar con Google"
                         )
+                    }
                 }
             )
         }

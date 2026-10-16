@@ -81,7 +81,10 @@ fun XmedicNavHost(
         composable(Screen.RoleSelection.route) {
             RoleSelectionScreen(
                 onNavigateBack = {
-                    navController.popBackStack()
+                    com.example.xmedic_v100.data.repository.AuthRepository().signOut()
+                    navController.navigate(Screen.Login.route) {
+                        popUpTo(Screen.RoleSelection.route) { inclusive = true }
+                    }
                 },
                 onContinue = { selectedRole ->
                     // Guardar rol en DataStore / ViewModel y avanzar a pantalla principal
