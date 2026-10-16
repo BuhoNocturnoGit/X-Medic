@@ -86,7 +86,9 @@ fun RoleSelectionScreen(
     onContinue: (UserRole) -> Unit = {},
     onSkip: () -> Unit = {}
 ) {
-    var selectedRole by remember { mutableStateOf(UserRole.PACIENTE) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val userRepository = remember { com.example.xmedic_v100.data.repository.UserRepository(context) }
+    var selectedRole by remember { mutableStateOf(userRepository.getUserRole()) }
     val scrollState = rememberScrollState()
 
     Box(
@@ -244,7 +246,10 @@ fun RoleSelectionScreen(
             // Botón Continuar (CTA Principal)
             XmedicPrimaryButton(
                 text = "Continuar",
-                onClick = { onContinue(selectedRole) },
+                onClick = {
+                    userRepository.saveUserRole(selectedRole)
+                    onContinue(selectedRole)
+                },
                 modifier = Modifier.fillMaxWidth()
             )
 
@@ -252,7 +257,10 @@ fun RoleSelectionScreen(
 
             // Botón Secundario: Configurar después
             TextButton(
-                onClick = onSkip,
+                onClick = {
+                    userRepository.saveUserRole(selectedRole)
+                    onSkip()
+                },
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(

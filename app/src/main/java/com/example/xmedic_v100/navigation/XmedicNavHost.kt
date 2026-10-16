@@ -2,20 +2,27 @@ package com.example.xmedic_v100.navigation
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.example.xmedic_v100.data.repository.AuthRepository
+import com.example.xmedic_v100.data.repository.UserRepository
 import com.example.xmedic_v100.ui.screens.LoginScreen
 import com.example.xmedic_v100.ui.screens.RegisterScreen
 import com.example.xmedic_v100.ui.screens.RoleSelectionScreen
 import com.example.xmedic_v100.ui.screens.SplashScreen
+import com.example.xmedic_v100.ui.screens.main.MainContainerScreen
+import com.example.xmedic_v100.ui.screens.store.TokenStoreScreen
 
 sealed class Screen(val route: String) {
     object Splash : Screen("splash")
     object Login : Screen("login")
     object Register : Screen("register")
     object RoleSelection : Screen("role_selection")
+    object Main : Screen("main")
+    object TokenStore : Screen("token_store")
 }
 
 @Composable
@@ -23,6 +30,8 @@ fun XmedicNavHost(
     modifier: Modifier = Modifier,
     navController: NavHostController = rememberNavController()
 ) {
+    val context = LocalContext.current
+
     NavHost(
         navController = navController,
         startDestination = Screen.Splash.route,
@@ -36,7 +45,7 @@ fun XmedicNavHost(
                     }
                 },
                 onNavigateToHome = {
-                    navController.navigate(Screen.RoleSelection.route) {
+                    navController.navigate(Screen.Main.route) {
                         popUpTo(Screen.Splash.route) { inclusive = true }
                     }
                 }
@@ -81,16 +90,45 @@ fun XmedicNavHost(
         composable(Screen.RoleSelection.route) {
             RoleSelectionScreen(
                 onNavigateBack = {
-                    com.example.xmedic_v100.data.repository.AuthRepository().signOut()
+                    AuthRepository().signOut()
                     navController.navigate(Screen.Login.route) {
                         popUpTo(Screen.RoleSelection.route) { inclusive = true }
                     }
                 },
                 onContinue = { selectedRole ->
-                    // Guardar rol en DataStore / ViewModel y avanzar a pantalla principal
+                    UserRepository(context).saveUserRole(selectedRole)
+                    navController.navigate(Screen.Main.route) {
+                        popUpTo(Screen.RoleSelection.route) { inclusive = true }
+                    }
                 },
                 onSkip = {
-                    // Omitir selección y continuar
+                    navController.navigate(Screen.Main.route) {
+                        popUpTo(Screen.RoleSelection.route) { inclusive = true }
+                    }
+                }
+            )
+        }
+
+        composable(Screen.Main.route) {
+            MainContainerScreen(
+                onOpenStore = {
+                    navController.navigate(Screen.TokenStore.route)
+                },
+                onSignOut = {
+                    AuthRepository().signOut()
+                    navController.navigate(Screen.Login.route) {
+                        popUpTo(Screen.Main.route) { inclusive = true }
+                    }
+                }
+            )
+        }
+
+        composable(Screen.TokenStore.route) {
+            val userRepository = UserRepository(context)
+            TokenStoreScreen(
+                tokenCount = userRepository.getTokenCount(),
+                onNavigateBack = {
+                    navController.popBackStack()
                 }
             )
         }
