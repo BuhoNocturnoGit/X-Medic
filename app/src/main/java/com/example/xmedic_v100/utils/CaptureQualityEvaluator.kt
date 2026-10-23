@@ -38,24 +38,52 @@ class CaptureQualityEvaluator(
     private var previousPixels: IntArray? = null
 
     /**
-     * Evalúa el fotograma en tiempo real y determina las instrucciones y estado del obturador.
+     * Evalúa el fotograma en tiempo real y determina las instrucciones y el estado del obturador.
      */
     fun evaluateFrame(bitmap: Bitmap): EvaluatorResult {
-        // 1. Detección geométrica del cuadrilátero de la radiografía
-        val doc = detector.detectDocument(bitmap)
+        // 1. Análisis de iluminación global del fotograma
+        val qualityAnalysis = ImageProcessor.analyzeBitmapQuality(bitmap)
 
-        if (doc.confidence < 0.35f || !doc.isQuadrilateral) {
+        if (qualityAnalysis.brightness in 1f..29f) {
             consecutiveValidFrames = 0
-            Log.d("XRayScanner", "Evaluación: Buscando radiografía (Confianza insuficiente)")
+            Log.d("XRayScanner", "Evaluación: Iluminación insuficiente (Brillo=${qualityAnalysis.brightness})")
             return EvaluatorResult(
-                state = CaptureQualityState.SEARCHING_DOCUMENT,
-                guidanceMessage = "Buscando radiografía...",
+                state = CaptureQualityState.TOO_DARK,
+                guidanceMessage = "Hay poca iluminación. Mejora la luz ambiental",
                 isShutterEnabled = false,
-                detectedDocument = doc,
+                detectedDocument = DetectedDocument(),
                 frameQualityState = FrameQualityState.Insufficient
             )
         }
 
+        if (qualityAnalysis.brightness > 225f) {
+            consecutiveValidFrames = 0
+            Log.d("XRayScanner", "Evaluación: Sobreexposición severa (Brillo=${qualityAnalysis.brightness})")
+            return EvaluatorResult(
+                state = CaptureQualityState.OVEREXPOSED,
+                guidanceMessage = "Demasiada iluminación. Reduce la luz directa",
+                isShutterEnabled = false,
+                detectedDocument = DetectedDocument(),
+                frameQualityState = FrameQualityState.Insufficient
+            )
+        }
+
+        // 2. Detección geométrica del cuadrilátero de la radiografía
+        val doc = detector.detectDocument(bitmap)
+
+        if (doc.confidence < 0.50f || !doc.isQuadrilateral) {
+            consecutiveValidFrames = 0
+            Log.d("XRayScanner", "Evaluación: Buscando radiografía (No se detectó candidato válido)")
+            return EvaluatorResult(
+                state = CaptureQualityState.SEARCHING_DOCUMENT,
+                guidanceMessage = "Buscando radiografía...",
+                isShutterEnabled = false,
+                detectedDocument = DetectedDocument(),
+                frameQualityState = FrameQualityState.Insufficient
+            )
+        }
+
+        // 3. Verificaciones de encuadre únicamente si existe una radiografía detectada
         if (doc.isCutOff) {
             consecutiveValidFrames = 0
             Log.d("XRayScanner", "Evaluación Rechazada: Bordes cortados por el límite del fotograma")
@@ -92,7 +120,7 @@ class CaptureQualityEvaluator(
             )
         }
 
-        // Posicionamiento y desalineación
+        // Desalineación de posición
         when {
             doc.centerOffset.x < -0.28f -> {
                 consecutiveValidFrames = 0
@@ -147,33 +175,7 @@ class CaptureQualityEvaluator(
             )
         }
 
-        // 2. Análisis de Iluminación y Nitidez
-        val qualityAnalysis = ImageProcessor.analyzeBitmapQuality(bitmap)
-
-        if (qualityAnalysis.brightness < 35f) {
-            consecutiveValidFrames = 0
-            Log.d("XRayScanner", "Evaluación Rechazada: Iluminación insuficiente (Brillo=${qualityAnalysis.brightness})")
-            return EvaluatorResult(
-                state = CaptureQualityState.TOO_DARK,
-                guidanceMessage = "Hay poca iluminación. Mejora la luz ambiental",
-                isShutterEnabled = false,
-                detectedDocument = doc,
-                frameQualityState = FrameQualityState.Insufficient
-            )
-        }
-
-        if (qualityAnalysis.brightness > 220f) {
-            consecutiveValidFrames = 0
-            Log.d("XRayScanner", "Evaluación Rechazada: Sobreexposición (Brillo=${qualityAnalysis.brightness})")
-            return EvaluatorResult(
-                state = CaptureQualityState.OVEREXPOSED,
-                guidanceMessage = "Demasiada iluminación. Reduce la luz directa",
-                isShutterEnabled = false,
-                detectedDocument = doc,
-                frameQualityState = FrameQualityState.Insufficient
-            )
-        }
-
+        // 4. Verificaciones de reflejos y nitidez
         if (qualityAnalysis.hasReflections) {
             consecutiveValidFrames = 0
             Log.d("XRayScanner", "Evaluación Rechazada: Reflejos especulares detectados")
@@ -198,7 +200,7 @@ class CaptureQualityEvaluator(
             )
         }
 
-        // 3. Verificación de estabilidad entre fotogramas
+        // 5. Verificación de estabilidad entre fotogramas
         val isMoving = isCameraMoving(bitmap)
         if (isMoving) {
             consecutiveValidFrames = 0
@@ -212,11 +214,11 @@ class CaptureQualityEvaluator(
             )
         }
 
-        // 4. Estabilización temporal: requiere fotogramas válidos consecutivos (~1.5 segundos)
+        // 6. Estabilización temporal: requiere fotogramas válidos consecutivos (~1.5 segundos)
         consecutiveValidFrames++
 
         return if (consecutiveValidFrames >= 3) {
-            Log.d("XRayScanner", "Evaluación ÉXITO: Radiografía lista para capturar (Fotogramas Válidos=$consecutiveValidFrames)")
+            Log.d("XRayScanner", "Evaluación READY: Radiografía lista para capturar (Fotogramas=$consecutiveValidFrames)")
             EvaluatorResult(
                 state = CaptureQualityState.READY,
                 guidanceMessage = "Radiografía lista para capturar",

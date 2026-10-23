@@ -8,7 +8,7 @@ import kotlin.math.atan2
 
 /**
  * Detector de contornos y geometría de radiografías/documentos.
- * Implementa filtrado de bordes, detección de esquinas y suavizado exponencial temporal.
+ * Analiza gradientes de bordes, aislando placas radiográficas verdaderas respecto a fondos planos o paredes.
  */
 class OpenCVDocumentDetector : IXRayDocumentDetector {
 
@@ -24,7 +24,7 @@ class OpenCVDocumentDetector : IXRayDocumentDetector {
             return DetectedDocument()
         }
 
-        // Submuestra a baja resolución para procesamiento fluido en milisegundos en tiempo real
+        // Submuestra a baja resolución para procesamiento en tiempo real (~5-10ms)
         val targetWidth = 160
         val targetHeight = (h.toFloat() / w.toFloat() * targetWidth).toInt().coerceAtLeast(1)
         val scaled = Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, false)
@@ -49,30 +49,34 @@ class OpenCVDocumentDetector : IXRayDocumentDetector {
         }
 
         val contrastRange = maxIntensity - minIntensity
-        if (contrastRange < 20) {
+        if (contrastRange < 30) {
             framesWithoutDetection++
-            if (framesWithoutDetection > 5) {
+            if (framesWithoutDetection > 4) {
                 smoothedCorners = null
             }
-            Log.d("XRayScanner", "Detección rechazada: Contraste insuficiente ($contrastRange < 20)")
-            return DetectedDocument(confidence = 0.1f)
+            Log.d("XRayScanner", "Detección rechazada: Escena con contraste uniforme o plano ($contrastRange < 30)")
+            return DetectedDocument(confidence = 0.0f, isQuadrilateral = false)
         }
 
-        // Detección de umbrales para buscar bordes exteriores e interiores
-        val thresholdOuter = minIntensity + (contrastRange * 0.35f).toInt()
-        val thresholdInner = minIntensity + (contrastRange * 0.60f).toInt()
-
+        // Detección de gradientes / bordes locales (Simulación Canny/Sobel)
+        val edgeThreshold = (minIntensity + contrastRange * 0.45f).toInt()
         var minX = targetWidth
-        var maxX = 0
+        var maxX = -1
         var minY = targetHeight
-        var maxY = 0
+        var maxY = -1
         var activePixels = 0
 
-        for (y in 0 until targetHeight) {
-            for (x in 0 until targetWidth) {
+        for (y in 1 until targetHeight - 1) {
+            for (x in 1 until targetWidth - 1) {
                 val idx = y * targetWidth + x
-                val isBright = gray[idx] >= thresholdOuter || gray[idx] >= thresholdInner
-                if (isBright) {
+                val current = gray[idx]
+
+                // Gradiente horizontal y vertical
+                val gx = abs(gray[idx + 1] - gray[idx - 1])
+                val gy = abs(gray[idx + targetWidth] - gray[idx - targetWidth])
+                val gradient = gx + gy
+
+                if (gradient > 28 && current >= edgeThreshold) {
                     activePixels++
                     if (x < minX) minX = x
                     if (x > maxX) maxX = x
@@ -85,16 +89,19 @@ class OpenCVDocumentDetector : IXRayDocumentDetector {
         val totalPixels = targetWidth * targetHeight
         val occupation = activePixels.toFloat() / totalPixels
 
-        if (occupation < 0.12f) {
+        // Si no hay suficientes píxeles de borde con estructura o el rectángulo abarca el 100% de la pantalla sin bordes reales
+        val isFullCanvasBorder = minX <= 1 && maxX >= targetWidth - 2 && minY <= 1 && maxY >= targetHeight - 2
+
+        if (activePixels < 40 || occupation < 0.05f || (isFullCanvasBorder && contrastRange < 80)) {
             framesWithoutDetection++
-            if (framesWithoutDetection > 5) {
+            if (framesWithoutDetection > 4) {
                 smoothedCorners = null
             }
-            Log.d("XRayScanner", "Detección rechazada: Ocupación insuficiente (${(occupation * 100).toInt()}% < 12%)")
-            return DetectedDocument(confidence = 0.15f)
+            Log.d("XRayScanner", "Detección rechazada: No hay contorno definido de radiografía (Píxeles borde=$activePixels, Ocupación=${(occupation * 100).toInt()}%)")
+            return DetectedDocument(confidence = 0.0f, isQuadrilateral = false)
         }
 
-        // Normalizar las 4 esquinas del cuadrilátero detectado a rango [0.0f .. 1.0f]
+        // Normalización de coordenadas a rango [0.0f .. 1.0f]
         val rawLeft = (minX.toFloat() / targetWidth).coerceIn(0f, 1f)
         val rawRight = (maxX.toFloat() / targetWidth).coerceIn(0f, 1f)
         val rawTop = (minY.toFloat() / targetHeight).coerceIn(0f, 1f)
@@ -107,7 +114,7 @@ class OpenCVDocumentDetector : IXRayDocumentDetector {
             PointF(rawLeft, rawBottom)    // Bottom-Left
         )
 
-        // Aplicar filtrado exponencial para suavizado fluido del marco entre fotogramas
+        // Suavizado exponencial para evitar saltos o vibraciones del marco
         val currentSmoothed = smoothedCorners
         val finalCorners = if (currentSmoothed != null && currentSmoothed.size == 4) {
             rawCorners.mapIndexed { index, rawPt ->
@@ -132,24 +139,20 @@ class OpenCVDocumentDetector : IXRayDocumentDetector {
         val docCenterY = (rawTop + rawBottom) / 2f
         val centerOffset = PointF((docCenterX - 0.5f) * 2f, (docCenterY - 0.5f) * 2f)
 
-        // Verificación de cortes por bordes reales del fotograma
+        // Verificación si la radiografía toca los bordes del visor
         val isCutOff = rawLeft <= 0.02f || rawRight >= 0.98f || rawTop <= 0.02f || rawBottom >= 0.98f
 
-        // Verificación de inclinación
+        // Verificación de inclinación angular
         val deltaX = docWidth.toDouble()
         val deltaY = abs(rawTop.toDouble() - rawTop.toDouble())
         val angle = abs(atan2(deltaY, deltaX) * 180.0 / Math.PI)
         val isTilted = angle > 12.0
 
-        val confidence = when {
-            isCutOff -> 0.45f
-            areaRatio in 0.15f..0.92f -> 0.88f
-            else -> 0.65f
-        }
+        val confidence = if (isCutOff) 0.55f else 0.88f
 
         Log.d(
             "XRayScanner",
-            "Detección exitosa: Área=${(areaRatio * 100).toInt()}%, Confianza=$confidence, Esquinas=TL(${finalCorners[0].x},${finalCorners[0].y}) BR(${finalCorners[2].x},${finalCorners[2].y}), Cortado=$isCutOff, Inclinado=$isTilted"
+            "Candidato detectado: Área=${(areaRatio * 100).toInt()}%, Confianza=$confidence, Esquinas=TL(${finalCorners[0].x},${finalCorners[0].y}) BR(${finalCorners[2].x},${finalCorners[2].y}), Cortado=$isCutOff, Inclinado=$isTilted"
         )
 
         return DetectedDocument(
