@@ -38,7 +38,8 @@ data class BottomNavItem(
 @Composable
 fun MainContainerScreen(
     onOpenStore: () -> Unit = {},
-    onSignOut: () -> Unit = {}
+    onSignOut: () -> Unit = {},
+    onOpenScanner: () -> Unit = {}
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
 
@@ -84,7 +85,7 @@ fun MainContainerScreen(
     ) { paddingValues ->
         Box(modifier = Modifier.padding(paddingValues)) {
             when (selectedTab) {
-                0 -> HomeScreen(onOpenStore = onOpenStore)
+                0 -> HomeScreen(onOpenStore = onOpenStore, onOpenScanner = onOpenScanner)
                 1 -> LibraryScreen()
                 2 -> ProfileScreen(onOpenStore = onOpenStore, onSignOut = onSignOut)
             }

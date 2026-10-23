@@ -52,7 +52,8 @@ import com.example.xmedic_v100.ui.theme.TextSlate
 
 @Composable
 fun HomeScreen(
-    onOpenStore: () -> Unit = {}
+    onOpenStore: () -> Unit = {},
+    onOpenScanner: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val userRepository = UserRepository(context)
@@ -266,7 +267,7 @@ fun HomeScreen(
                 .shadow(6.dp, CircleShape, spotColor = PrimaryTeal)
                 .clip(CircleShape)
                 .background(PrimaryTeal)
-                .clickable { },
+                .clickable { onOpenScanner() },
             contentAlignment = Alignment.Center
         ) {
             Icon(imageVector = Icons.Default.CameraAlt, contentDescription = "Escanear", tint = Color.White, modifier = Modifier.size(26.dp))

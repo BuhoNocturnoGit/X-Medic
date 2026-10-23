@@ -1,19 +1,24 @@
 package com.example.xmedic_v100.navigation
 
+import android.net.Uri
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import com.example.xmedic_v100.data.repository.AuthRepository
 import com.example.xmedic_v100.data.repository.UserRepository
 import com.example.xmedic_v100.ui.screens.LoginScreen
 import com.example.xmedic_v100.ui.screens.RegisterScreen
 import com.example.xmedic_v100.ui.screens.RoleSelectionScreen
 import com.example.xmedic_v100.ui.screens.SplashScreen
+import com.example.xmedic_v100.ui.screens.camera.CameraScannerScreen
 import com.example.xmedic_v100.ui.screens.main.MainContainerScreen
+import com.example.xmedic_v100.ui.screens.processing.ProcessingScreen
 import com.example.xmedic_v100.ui.screens.store.TokenStoreScreen
 
 sealed class Screen(val route: String) {
@@ -23,6 +28,10 @@ sealed class Screen(val route: String) {
     object RoleSelection : Screen("role_selection")
     object Main : Screen("main")
     object TokenStore : Screen("token_store")
+    object CameraScanner : Screen("camera_scanner")
+    object Processing : Screen("processing/{imageUri}") {
+        fun createRoute(imageUri: Uri): String = "processing/${Uri.encode(imageUri.toString())}"
+    }
 }
 
 @Composable
@@ -117,6 +126,43 @@ fun XmedicNavHost(
                 onSignOut = {
                     AuthRepository().signOut()
                     navController.navigate(Screen.Login.route) {
+                        popUpTo(Screen.Main.route) { inclusive = true }
+                    }
+                },
+                onOpenScanner = {
+                    navController.navigate(Screen.CameraScanner.route)
+                }
+            )
+        }
+
+        composable(Screen.CameraScanner.route) {
+            CameraScannerScreen(
+                onBackClick = {
+                    navController.popBackStack()
+                },
+                onImageConfirmed = { uri ->
+                    navController.navigate(Screen.Processing.createRoute(uri))
+                },
+                onTokensClick = {
+                    navController.navigate(Screen.TokenStore.route)
+                }
+            )
+        }
+
+        composable(
+            route = "processing/{imageUri}",
+            arguments = listOf(navArgument("imageUri") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val encodedUri = backStackEntry.arguments?.getString("imageUri") ?: ""
+            val imageUri = Uri.parse(Uri.decode(encodedUri))
+
+            ProcessingScreen(
+                imageUri = imageUri,
+                onNavigateBack = {
+                    navController.popBackStack()
+                },
+                onProcessingComplete = {
+                    navController.navigate(Screen.Main.route) {
                         popUpTo(Screen.Main.route) { inclusive = true }
                     }
                 }
