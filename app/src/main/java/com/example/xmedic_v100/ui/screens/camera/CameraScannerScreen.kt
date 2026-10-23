@@ -350,6 +350,8 @@ fun CameraScannerScreen(
 
                     XRayAlignmentOverlay(
                         modifier = Modifier.fillMaxSize(),
+                        detectedDocument = evaluatorResult.detectedDocument,
+                        captureState = evaluatorResult.state,
                         qualityState = evaluatorResult.frameQualityState,
                         isScanning = isScanning,
                         scanProgress = scanProgress

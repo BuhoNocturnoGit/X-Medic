@@ -1,6 +1,7 @@
 package com.example.xmedic_v100.utils
 
 import android.graphics.Bitmap
+import android.util.Log
 
 enum class CaptureQualityState {
     SEARCHING_DOCUMENT,
@@ -24,7 +25,7 @@ enum class CaptureQualityState {
 
 data class EvaluatorResult(
     val state: CaptureQualityState = CaptureQualityState.SEARCHING_DOCUMENT,
-    val guidanceMessage: String = "Busca una radiografía dentro del marco",
+    val guidanceMessage: String = "Buscando radiografía...",
     val isShutterEnabled: Boolean = false,
     val detectedDocument: DetectedDocument = DetectedDocument(),
     val frameQualityState: FrameQualityState = FrameQualityState.Insufficient
@@ -37,17 +38,18 @@ class CaptureQualityEvaluator(
     private var previousPixels: IntArray? = null
 
     /**
-     * Evalúa la imagen en tiempo real y produce un resultado estructurado con el estado de captura.
+     * Evalúa el fotograma en tiempo real y determina las instrucciones y estado del obturador.
      */
     fun evaluateFrame(bitmap: Bitmap): EvaluatorResult {
-        // 1. Detección geométrica del documento / radiografía
+        // 1. Detección geométrica del cuadrilátero de la radiografía
         val doc = detector.detectDocument(bitmap)
 
         if (doc.confidence < 0.35f || !doc.isQuadrilateral) {
             consecutiveValidFrames = 0
+            Log.d("XRayScanner", "Evaluación: Buscando radiografía (Confianza insuficiente)")
             return EvaluatorResult(
                 state = CaptureQualityState.SEARCHING_DOCUMENT,
-                guidanceMessage = "No se detecta una radiografía. Colócala frente a la cámara",
+                guidanceMessage = "Buscando radiografía...",
                 isShutterEnabled = false,
                 detectedDocument = doc,
                 frameQualityState = FrameQualityState.Insufficient
@@ -56,17 +58,19 @@ class CaptureQualityEvaluator(
 
         if (doc.isCutOff) {
             consecutiveValidFrames = 0
+            Log.d("XRayScanner", "Evaluación Rechazada: Bordes cortados por el límite del fotograma")
             return EvaluatorResult(
                 state = CaptureQualityState.OUT_OF_FRAME,
-                guidanceMessage = "Asegúrate de mostrar toda la radiografía",
+                guidanceMessage = "Aleja un poco la cámara para mostrar todos los bordes",
                 isShutterEnabled = false,
                 detectedDocument = doc,
                 frameQualityState = FrameQualityState.Insufficient
             )
         }
 
-        if (doc.areaRatio > 0.86f) {
+        if (doc.areaRatio > 0.88f) {
             consecutiveValidFrames = 0
+            Log.d("XRayScanner", "Evaluación Rechazada: Radiografía demasiado cerca (Área=${(doc.areaRatio * 100).toInt()}%)")
             return EvaluatorResult(
                 state = CaptureQualityState.TOO_CLOSE,
                 guidanceMessage = "Aleja un poco la cámara",
@@ -76,8 +80,9 @@ class CaptureQualityEvaluator(
             )
         }
 
-        if (doc.areaRatio < 0.22f) {
+        if (doc.areaRatio < 0.15f) {
             consecutiveValidFrames = 0
+            Log.d("XRayScanner", "Evaluación Rechazada: Radiografía demasiado lejos (Área=${(doc.areaRatio * 100).toInt()}%)")
             return EvaluatorResult(
                 state = CaptureQualityState.TOO_FAR,
                 guidanceMessage = "Acerca un poco la cámara",
@@ -89,7 +94,7 @@ class CaptureQualityEvaluator(
 
         // Posicionamiento y desalineación
         when {
-            doc.centerOffset.x < -0.22f -> {
+            doc.centerOffset.x < -0.28f -> {
                 consecutiveValidFrames = 0
                 return EvaluatorResult(
                     state = CaptureQualityState.MISALIGNED_LEFT,
@@ -99,7 +104,7 @@ class CaptureQualityEvaluator(
                     frameQualityState = FrameQualityState.Warning
                 )
             }
-            doc.centerOffset.x > 0.22f -> {
+            doc.centerOffset.x > 0.28f -> {
                 consecutiveValidFrames = 0
                 return EvaluatorResult(
                     state = CaptureQualityState.MISALIGNED_RIGHT,
@@ -109,7 +114,7 @@ class CaptureQualityEvaluator(
                     frameQualityState = FrameQualityState.Warning
                 )
             }
-            doc.centerOffset.y < -0.22f -> {
+            doc.centerOffset.y < -0.28f -> {
                 consecutiveValidFrames = 0
                 return EvaluatorResult(
                     state = CaptureQualityState.MISALIGNED_TOP,
@@ -119,7 +124,7 @@ class CaptureQualityEvaluator(
                     frameQualityState = FrameQualityState.Warning
                 )
             }
-            doc.centerOffset.y > 0.22f -> {
+            doc.centerOffset.y > 0.28f -> {
                 consecutiveValidFrames = 0
                 return EvaluatorResult(
                     state = CaptureQualityState.MISALIGNED_BOTTOM,
@@ -147,6 +152,7 @@ class CaptureQualityEvaluator(
 
         if (qualityAnalysis.brightness < 35f) {
             consecutiveValidFrames = 0
+            Log.d("XRayScanner", "Evaluación Rechazada: Iluminación insuficiente (Brillo=${qualityAnalysis.brightness})")
             return EvaluatorResult(
                 state = CaptureQualityState.TOO_DARK,
                 guidanceMessage = "Hay poca iluminación. Mejora la luz ambiental",
@@ -156,8 +162,9 @@ class CaptureQualityEvaluator(
             )
         }
 
-        if (qualityAnalysis.brightness > 215f) {
+        if (qualityAnalysis.brightness > 220f) {
             consecutiveValidFrames = 0
+            Log.d("XRayScanner", "Evaluación Rechazada: Sobreexposición (Brillo=${qualityAnalysis.brightness})")
             return EvaluatorResult(
                 state = CaptureQualityState.OVEREXPOSED,
                 guidanceMessage = "Demasiada iluminación. Reduce la luz directa",
@@ -169,17 +176,19 @@ class CaptureQualityEvaluator(
 
         if (qualityAnalysis.hasReflections) {
             consecutiveValidFrames = 0
+            Log.d("XRayScanner", "Evaluación Rechazada: Reflejos especulares detectados")
             return EvaluatorResult(
                 state = CaptureQualityState.GLARE_DETECTED,
-                guidanceMessage = "Se detectaron reflejos. Cambia el ángulo de la cámara",
+                guidanceMessage = "Evita los reflejos sobre la imagen",
                 isShutterEnabled = false,
                 detectedDocument = doc,
                 frameQualityState = FrameQualityState.Warning
             )
         }
 
-        if (qualityAnalysis.sharpness < 15f) {
+        if (qualityAnalysis.sharpness < 12f) {
             consecutiveValidFrames = 0
+            Log.d("XRayScanner", "Evaluación Rechazada: Imagen borrosa (Nitidez=${qualityAnalysis.sharpness})")
             return EvaluatorResult(
                 state = CaptureQualityState.BLUR_DETECTED,
                 guidanceMessage = "La imagen está borrosa. Enfoca la radiografía",
@@ -193,9 +202,10 @@ class CaptureQualityEvaluator(
         val isMoving = isCameraMoving(bitmap)
         if (isMoving) {
             consecutiveValidFrames = 0
+            Log.d("XRayScanner", "Evaluación Rechazada: Dispositivo en movimiento")
             return EvaluatorResult(
                 state = CaptureQualityState.UNSTABLE,
-                guidanceMessage = "Mantén el celular estable",
+                guidanceMessage = "Mantén la cámara estable",
                 isShutterEnabled = false,
                 detectedDocument = doc,
                 frameQualityState = FrameQualityState.Warning
@@ -206,6 +216,7 @@ class CaptureQualityEvaluator(
         consecutiveValidFrames++
 
         return if (consecutiveValidFrames >= 3) {
+            Log.d("XRayScanner", "Evaluación ÉXITO: Radiografía lista para capturar (Fotogramas Válidos=$consecutiveValidFrames)")
             EvaluatorResult(
                 state = CaptureQualityState.READY,
                 guidanceMessage = "Radiografía lista para capturar",
@@ -214,9 +225,10 @@ class CaptureQualityEvaluator(
                 frameQualityState = FrameQualityState.Acceptable
             )
         } else {
+            Log.d("XRayScanner", "Evaluación Verificando: Estabilizando fotogramas ($consecutiveValidFrames/3)")
             EvaluatorResult(
                 state = CaptureQualityState.VERIFYING,
-                guidanceMessage = "Encuadre correcto. Verificando calidad",
+                guidanceMessage = "Radiografía detectada. Mantén la cámara estable",
                 isShutterEnabled = false,
                 detectedDocument = doc,
                 frameQualityState = FrameQualityState.Warning
@@ -246,7 +258,7 @@ class CaptureQualityEvaluator(
             }
 
             val avgDiff = diffSum.toFloat() / currentPixels.size
-            avgDiff > 18f
+            avgDiff > 20f
         } catch (_: Exception) {
             false
         }

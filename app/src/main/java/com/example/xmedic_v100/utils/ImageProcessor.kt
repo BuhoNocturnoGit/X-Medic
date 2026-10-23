@@ -4,11 +4,12 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
-import android.net.Uri
+import android.graphics.PointF
 import android.media.ExifInterface
+import android.net.Uri
+import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
-import kotlin.math.abs
 
 enum class FrameQualityState {
     Acceptable,
@@ -18,7 +19,7 @@ enum class FrameQualityState {
 
 data class ImageQualityAnalysis(
     val state: FrameQualityState = FrameQualityState.Insufficient,
-    val guidanceMessage: String = "Coloca la radiografía dentro del marco",
+    val guidanceMessage: String = "Buscando radiografía...",
     val isStableAndReady: Boolean = false,
     val brightness: Float = 0f,
     val sharpness: Float = 0f,
@@ -27,11 +28,11 @@ data class ImageQualityAnalysis(
 
 object ImageProcessor {
 
-    private var lastGuidanceMessage: String = "Coloca la radiografía dentro del marco"
+    private var lastGuidanceMessage: String = "Buscando radiografía..."
     private var stableFrameCount: Int = 0
 
     /**
-     * Analiza un Bitmap para evaluar brillo, nitidez, reflejos y encuadre.
+     * Analiza un Bitmap para evaluar brillo, nitidez y reflejos especulares.
      */
     fun analyzeBitmapQuality(bitmap: Bitmap): ImageQualityAnalysis {
         val width = bitmap.width
@@ -41,13 +42,11 @@ object ImageProcessor {
             return ImageQualityAnalysis()
         }
 
-        // Submuestra pequeña para análisis rápido de luminancia y brillo
         val sampleSize = 64
         val scaledBitmap = Bitmap.createScaledBitmap(bitmap, sampleSize, sampleSize, false)
 
         var totalLuminance = 0L
         var overExposedCount = 0
-        var underExposedCount = 0
 
         val pixels = IntArray(sampleSize * sampleSize)
         scaledBitmap.getPixels(pixels, 0, sampleSize, 0, 0, sampleSize, sampleSize)
@@ -60,14 +59,13 @@ object ImageProcessor {
 
             totalLuminance += luminance
             if (luminance > 240) overExposedCount++
-            if (luminance < 15) underExposedCount++
         }
 
         val avgBrightness = totalLuminance.toFloat() / (sampleSize * sampleSize)
         val overExposedRatio = overExposedCount.toFloat() / (sampleSize * sampleSize)
         val hasReflections = overExposedRatio > 0.12f
 
-        // Cálculo de varianza para estimar la nitidez
+        // Varianza para estimar la nitidez
         var varianceSum = 0.0
         for (i in 0 until pixels.size - 1) {
             val p1 = pixels[i] and 0xFF
@@ -76,49 +74,11 @@ object ImageProcessor {
             varianceSum += diff * diff
         }
         val sharpness = (varianceSum / pixels.size).toFloat()
-        val isBlurry = sharpness < 15f
-
-        // Determinar mensaje y estado de calidad
-        val newMessage: String
-        val state: FrameQualityState
-
-        when {
-            avgBrightness < 35f -> {
-                newMessage = "Hay demasiada oscuridad"
-                state = FrameQualityState.Insufficient
-            }
-            avgBrightness > 220f -> {
-                newMessage = "Hay demasiada iluminación"
-                state = FrameQualityState.Insufficient
-            }
-            hasReflections -> {
-                newMessage = "Se detectaron reflejos"
-                state = FrameQualityState.Warning
-            }
-            isBlurry -> {
-                newMessage = "La imagen está borrosa. Mantén el dispositivo estable"
-                state = FrameQualityState.Warning
-            }
-            else -> {
-                newMessage = "Radiografía bien encuadrada. Lista para capturar"
-                state = FrameQualityState.Acceptable
-            }
-        }
-
-        // Estabilización temporal para evitar parpadeo de mensajes
-        if (newMessage == lastGuidanceMessage) {
-            stableFrameCount++
-        } else {
-            stableFrameCount = 0
-            lastGuidanceMessage = newMessage
-        }
-
-        val isReady = state == FrameQualityState.Acceptable && stableFrameCount >= 3
 
         return ImageQualityAnalysis(
-            state = state,
+            state = if (sharpness >= 12f && !hasReflections) FrameQualityState.Acceptable else FrameQualityState.Warning,
             guidanceMessage = lastGuidanceMessage,
-            isStableAndReady = isReady,
+            isStableAndReady = true,
             brightness = avgBrightness,
             sharpness = sharpness,
             hasReflections = hasReflections
@@ -126,29 +86,60 @@ object ImageProcessor {
     }
 
     /**
-     * Procesa la imagen capturada: corrige orientación EXIF y guarda en archivo temporal de caché.
+     * Procesa la imagen capturada de alta resolución: corrige orientación EXIF y aplica recorte inteligente si se proporcionan las esquinas.
      */
-    fun processAndCacheCapturedImage(context: Context, sourceUri: Uri): Uri? {
+    fun processAndCacheCapturedImage(
+        context: Context,
+        sourceUri: Uri,
+        corners: List<PointF>? = null
+    ): Uri? {
         return try {
             val inputStream = context.contentResolver.openInputStream(sourceUri) ?: return null
             val options = BitmapFactory.Options().apply { inJustDecodeBounds = false }
             val bitmap = BitmapFactory.decodeStream(inputStream, null, options) ?: return null
             inputStream.close()
 
-            // Corregir orientación EXIF
+            // 1. Corregir orientación EXIF
             val rotatedBitmap = correctExifOrientation(context, sourceUri, bitmap)
 
-            // Guardar en archivo temporal de caché
+            // 2. Aplicar recorte inteligente basado en las 4 esquinas reales detectadas
+            val croppedBitmap = if (corners != null && corners.size == 4) {
+                cropBitmapByCorners(rotatedBitmap, corners)
+            } else {
+                rotatedBitmap
+            }
+
+            // 3. Guardar en archivo temporal de caché
             val cacheFile = File(context.cacheAreaDir(), "xray_processed_${System.currentTimeMillis()}.jpg")
             val outputStream = FileOutputStream(cacheFile)
-            rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, 92, outputStream)
+            croppedBitmap.compress(Bitmap.CompressFormat.JPEG, 92, outputStream)
             outputStream.flush()
             outputStream.close()
 
+            Log.d("XRayScanner", "Imagen procesada y guardada en caché: ${cacheFile.absolutePath}")
             Uri.fromFile(cacheFile)
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e("XRayScanner", "Error al procesar la imagen capturada", e)
             sourceUri
+        }
+    }
+
+    private fun cropBitmapByCorners(bitmap: Bitmap, corners: List<PointF>): Bitmap {
+        return try {
+            val bw = bitmap.width.toFloat()
+            val bh = bitmap.height.toFloat()
+
+            val left = (corners.minOf { it.x } * bw).coerceIn(0f, bw - 1f).toInt()
+            val top = (corners.minOf { it.y } * bh).coerceIn(0f, bh - 1f).toInt()
+            val right = (corners.maxOf { it.x } * bw).coerceIn(1f, bw).toInt()
+            val bottom = (corners.maxOf { it.y } * bh).coerceIn(1f, bh).toInt()
+
+            val cropW = (right - left).coerceAtLeast(10)
+            val cropH = (bottom - top).coerceAtLeast(10)
+
+            Bitmap.createBitmap(bitmap, left, top, cropW, cropH)
+        } catch (e: Exception) {
+            bitmap
         }
     }
 
@@ -167,7 +158,7 @@ object ImageProcessor {
                 else -> return bitmap
             }
             Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             bitmap
         }
     }

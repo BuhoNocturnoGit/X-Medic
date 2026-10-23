@@ -1,5 +1,6 @@
 package com.example.xmedic_v100.ui.components
 
+import android.graphics.PointF
 import android.net.Uri
 import android.util.Log
 import androidx.camera.core.CameraSelector
@@ -14,7 +15,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -41,6 +45,8 @@ fun CameraView(
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
     val evaluator = remember { CaptureQualityEvaluator() }
 
+    var latestCorners by remember { mutableStateOf<List<PointF>?>(null) }
+
     val previewView = remember { PreviewView(context) }
     val imageCapture = remember {
         ImageCapture.Builder()
@@ -53,7 +59,10 @@ fun CameraView(
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .build().apply {
                 setAnalyzer(cameraExecutor) { imageProxy ->
-                    analyzeFrame(imageProxy, evaluator, onEvaluatorResult)
+                    analyzeFrame(imageProxy, evaluator) { result ->
+                        latestCorners = result.detectedDocument.corners
+                        onEvaluatorResult(result)
+                    }
                 }
             }
     }
@@ -105,7 +114,7 @@ fun CameraView(
                 object : ImageCapture.OnImageSavedCallback {
                     override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
                         val rawUri = Uri.fromFile(photoFile)
-                        val processedUri = ImageProcessor.processAndCacheCapturedImage(context, rawUri) ?: rawUri
+                        val processedUri = ImageProcessor.processAndCacheCapturedImage(context, rawUri, latestCorners) ?: rawUri
                         onImageCaptured(processedUri)
                         onCaptureHandled()
                     }
