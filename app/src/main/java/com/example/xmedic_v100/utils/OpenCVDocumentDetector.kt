@@ -140,13 +140,14 @@ class OpenCVDocumentDetector : IXRayDocumentDetector {
         val centerOffset = PointF((docCenterX - 0.5f) * 2f, (docCenterY - 0.5f) * 2f)
 
         // Verificación si la radiografía toca los bordes del visor
-        val isCutOff = rawLeft <= 0.02f || rawRight >= 0.98f || rawTop <= 0.02f || rawBottom >= 0.98f
+        val margin = ScannerConfig.FRAME_SAFETY_MARGIN
+        val isCutOff = rawLeft <= margin || rawRight >= (1f - margin) || rawTop <= margin || rawBottom >= (1f - margin)
 
         // Verificación de inclinación angular
         val deltaX = docWidth.toDouble()
         val deltaY = abs(rawTop.toDouble() - rawTop.toDouble())
         val angle = abs(atan2(deltaY, deltaX) * 180.0 / Math.PI)
-        val isTilted = angle > 12.0
+        val isTilted = angle > ScannerConfig.MAX_TILT_DEGREES
 
         val confidence = if (isCutOff) 0.55f else 0.88f
 

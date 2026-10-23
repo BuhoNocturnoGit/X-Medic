@@ -14,20 +14,21 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import com.example.xmedic_v100.utils.CaptureQualityState
 import com.example.xmedic_v100.utils.DetectedDocument
 import com.example.xmedic_v100.utils.FrameQualityState
+import com.example.xmedic_v100.utils.QualityLevel
 
 @Composable
 fun XRayAlignmentOverlay(
     modifier: Modifier = Modifier,
     detectedDocument: DetectedDocument = DetectedDocument(),
     captureState: CaptureQualityState = CaptureQualityState.SEARCHING_DOCUMENT,
+    qualityLevel: QualityLevel = QualityLevel.REJECTED,
     qualityState: FrameQualityState = FrameQualityState.Insufficient,
     isScanning: Boolean = false,
     scanProgress: Float = 0f
 ) {
     val bracketColor = when {
-        captureState == CaptureQualityState.READY -> Color(0xFF00C2CB)
-        qualityState == FrameQualityState.Warning -> Color(0xFFF59E0B)
-        qualityState == FrameQualityState.Acceptable -> Color(0xFF00C2CB)
+        captureState == CaptureQualityState.READY || qualityLevel == QualityLevel.EXCELLENT || qualityLevel == QualityLevel.ACCEPTABLE -> Color(0xFF00C2CB)
+        captureState == CaptureQualityState.VERIFYING -> Color(0xFFF59E0B)
         else -> Color(0xFFEF4444)
     }
 

@@ -352,6 +352,7 @@ fun CameraScannerScreen(
                         modifier = Modifier.fillMaxSize(),
                         detectedDocument = evaluatorResult.detectedDocument,
                         captureState = evaluatorResult.state,
+                        qualityLevel = evaluatorResult.level,
                         qualityState = evaluatorResult.frameQualityState,
                         isScanning = isScanning,
                         scanProgress = scanProgress

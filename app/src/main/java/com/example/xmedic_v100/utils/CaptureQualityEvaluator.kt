@@ -23,8 +23,16 @@ enum class CaptureQualityState {
     READY
 }
 
+enum class QualityLevel {
+    REJECTED,
+    ACCEPTABLE,
+    EXCELLENT
+}
+
 data class EvaluatorResult(
     val state: CaptureQualityState = CaptureQualityState.SEARCHING_DOCUMENT,
+    val level: QualityLevel = QualityLevel.REJECTED,
+    val globalScore: Float = 0f,
     val guidanceMessage: String = "Buscando radiografía...",
     val isShutterEnabled: Boolean = false,
     val detectedDocument: DetectedDocument = DetectedDocument(),
@@ -38,17 +46,19 @@ class CaptureQualityEvaluator(
     private var previousPixels: IntArray? = null
 
     /**
-     * Evalúa el fotograma en tiempo real y determina las instrucciones y el estado del obturador.
+     * Evalúa el fotograma en tiempo real y calcula puntuación flexible y nivel de calidad.
      */
     fun evaluateFrame(bitmap: Bitmap): EvaluatorResult {
-        // 1. Análisis de iluminación global del fotograma
+        // 1. Análisis de iluminación global
         val qualityAnalysis = ImageProcessor.analyzeBitmapQuality(bitmap)
 
-        if (qualityAnalysis.brightness in 1f..29f) {
+        if (qualityAnalysis.brightness in 1f..28f) {
             consecutiveValidFrames = 0
             Log.d("XRayScanner", "Evaluación: Iluminación insuficiente (Brillo=${qualityAnalysis.brightness})")
             return EvaluatorResult(
                 state = CaptureQualityState.TOO_DARK,
+                level = QualityLevel.REJECTED,
+                globalScore = 20f,
                 guidanceMessage = "Hay poca iluminación. Mejora la luz ambiental",
                 isShutterEnabled = false,
                 detectedDocument = DetectedDocument(),
@@ -61,6 +71,8 @@ class CaptureQualityEvaluator(
             Log.d("XRayScanner", "Evaluación: Sobreexposición severa (Brillo=${qualityAnalysis.brightness})")
             return EvaluatorResult(
                 state = CaptureQualityState.OVEREXPOSED,
+                level = QualityLevel.REJECTED,
+                globalScore = 25f,
                 guidanceMessage = "Demasiada iluminación. Reduce la luz directa",
                 isShutterEnabled = false,
                 detectedDocument = DetectedDocument(),
@@ -71,11 +83,13 @@ class CaptureQualityEvaluator(
         // 2. Detección geométrica del cuadrilátero de la radiografía
         val doc = detector.detectDocument(bitmap)
 
-        if (doc.confidence < 0.50f || !doc.isQuadrilateral) {
+        if (doc.confidence < 0.35f || !doc.isQuadrilateral) {
             consecutiveValidFrames = 0
             Log.d("XRayScanner", "Evaluación: Buscando radiografía (No se detectó candidato válido)")
             return EvaluatorResult(
                 state = CaptureQualityState.SEARCHING_DOCUMENT,
+                level = QualityLevel.REJECTED,
+                globalScore = 15f,
                 guidanceMessage = "Buscando radiografía...",
                 isShutterEnabled = false,
                 detectedDocument = DetectedDocument(),
@@ -83,12 +97,13 @@ class CaptureQualityEvaluator(
             )
         }
 
-        // 3. Verificaciones de encuadre únicamente si existe una radiografía detectada
         if (doc.isCutOff) {
             consecutiveValidFrames = 0
             Log.d("XRayScanner", "Evaluación Rechazada: Bordes cortados por el límite del fotograma")
             return EvaluatorResult(
                 state = CaptureQualityState.OUT_OF_FRAME,
+                level = QualityLevel.REJECTED,
+                globalScore = 40f,
                 guidanceMessage = "Aleja un poco la cámara para mostrar todos los bordes",
                 isShutterEnabled = false,
                 detectedDocument = doc,
@@ -96,146 +111,95 @@ class CaptureQualityEvaluator(
             )
         }
 
-        if (doc.areaRatio > 0.88f) {
-            consecutiveValidFrames = 0
-            Log.d("XRayScanner", "Evaluación Rechazada: Radiografía demasiado cerca (Área=${(doc.areaRatio * 100).toInt()}%)")
-            return EvaluatorResult(
-                state = CaptureQualityState.TOO_CLOSE,
-                guidanceMessage = "Aleja un poco la cámara",
-                isShutterEnabled = false,
-                detectedDocument = doc,
-                frameQualityState = FrameQualityState.Warning
-            )
-        }
-
-        if (doc.areaRatio < 0.15f) {
-            consecutiveValidFrames = 0
-            Log.d("XRayScanner", "Evaluación Rechazada: Radiografía demasiado lejos (Área=${(doc.areaRatio * 100).toInt()}%)")
-            return EvaluatorResult(
-                state = CaptureQualityState.TOO_FAR,
-                guidanceMessage = "Acerca un poco la cámara",
-                isShutterEnabled = false,
-                detectedDocument = doc,
-                frameQualityState = FrameQualityState.Warning
-            )
-        }
-
-        // Desalineación de posición
-        when {
-            doc.centerOffset.x < -0.28f -> {
-                consecutiveValidFrames = 0
-                return EvaluatorResult(
-                    state = CaptureQualityState.MISALIGNED_LEFT,
-                    guidanceMessage = "Mueve la cámara hacia la izquierda",
-                    isShutterEnabled = false,
-                    detectedDocument = doc,
-                    frameQualityState = FrameQualityState.Warning
-                )
-            }
-            doc.centerOffset.x > 0.28f -> {
-                consecutiveValidFrames = 0
-                return EvaluatorResult(
-                    state = CaptureQualityState.MISALIGNED_RIGHT,
-                    guidanceMessage = "Mueve la cámara hacia la derecha",
-                    isShutterEnabled = false,
-                    detectedDocument = doc,
-                    frameQualityState = FrameQualityState.Warning
-                )
-            }
-            doc.centerOffset.y < -0.28f -> {
-                consecutiveValidFrames = 0
-                return EvaluatorResult(
-                    state = CaptureQualityState.MISALIGNED_TOP,
-                    guidanceMessage = "Mueve la cámara hacia arriba",
-                    isShutterEnabled = false,
-                    detectedDocument = doc,
-                    frameQualityState = FrameQualityState.Warning
-                )
-            }
-            doc.centerOffset.y > 0.28f -> {
-                consecutiveValidFrames = 0
-                return EvaluatorResult(
-                    state = CaptureQualityState.MISALIGNED_BOTTOM,
-                    guidanceMessage = "Mueve la cámara hacia abajo",
-                    isShutterEnabled = false,
-                    detectedDocument = doc,
-                    frameQualityState = FrameQualityState.Warning
-                )
-            }
-        }
-
-        if (doc.isTilted) {
-            consecutiveValidFrames = 0
-            return EvaluatorResult(
-                state = CaptureQualityState.TILTED,
-                guidanceMessage = "Endereza la cámara",
-                isShutterEnabled = false,
-                detectedDocument = doc,
-                frameQualityState = FrameQualityState.Warning
-            )
-        }
-
-        // 4. Verificaciones de reflejos y nitidez
-        if (qualityAnalysis.hasReflections) {
-            consecutiveValidFrames = 0
-            Log.d("XRayScanner", "Evaluación Rechazada: Reflejos especulares detectados")
-            return EvaluatorResult(
-                state = CaptureQualityState.GLARE_DETECTED,
-                guidanceMessage = "Evita los reflejos sobre la imagen",
-                isShutterEnabled = false,
-                detectedDocument = doc,
-                frameQualityState = FrameQualityState.Warning
-            )
-        }
-
-        if (qualityAnalysis.sharpness < 12f) {
-            consecutiveValidFrames = 0
-            Log.d("XRayScanner", "Evaluación Rechazada: Imagen borrosa (Nitidez=${qualityAnalysis.sharpness})")
-            return EvaluatorResult(
-                state = CaptureQualityState.BLUR_DETECTED,
-                guidanceMessage = "La imagen está borrosa. Enfoca la radiografía",
-                isShutterEnabled = false,
-                detectedDocument = doc,
-                frameQualityState = FrameQualityState.Warning
-            )
-        }
-
-        // 5. Verificación de estabilidad entre fotogramas
+        // 3. Cálculo del Sistema de Puntuación de Calidad Normalizado (0 .. 100)
+        val geometryScore = computeGeometryScore(doc)
+        val illuminationScore = computeIlluminationScore(qualityAnalysis)
+        val sharpnessScore = computeSharpnessScore(qualityAnalysis.sharpness)
         val isMoving = isCameraMoving(bitmap)
-        if (isMoving) {
+        val stabilityScore = if (isMoving) 30f else 95f
+
+        val globalScore = (ScannerConfig.WEIGHT_GEOMETRY * geometryScore) +
+                (ScannerConfig.WEIGHT_ILLUMINATION * illuminationScore) +
+                (ScannerConfig.WEIGHT_SHARPNESS * sharpnessScore) +
+                (ScannerConfig.WEIGHT_STABILITY * stabilityScore)
+
+        // Clasificación en 3 Niveles de Calidad (REJECTED, ACCEPTABLE, EXCELLENT)
+        val level = when {
+            geometryScore < ScannerConfig.MIN_GEOMETRY_SCORE ||
+                    illuminationScore < ScannerConfig.MIN_ILLUMINATION_SCORE ||
+                    sharpnessScore < ScannerConfig.MIN_SHARPNESS_SCORE ||
+                    stabilityScore < ScannerConfig.MIN_STABILITY_SCORE -> QualityLevel.REJECTED
+
+            globalScore >= ScannerConfig.SCORE_EXCELLENT_THRESHOLD -> QualityLevel.EXCELLENT
+            globalScore >= ScannerConfig.SCORE_ACCEPTABLE_THRESHOLD -> QualityLevel.ACCEPTABLE
+            else -> QualityLevel.REJECTED
+        }
+
+        if (level == QualityLevel.REJECTED) {
             consecutiveValidFrames = 0
-            Log.d("XRayScanner", "Evaluación Rechazada: Dispositivo en movimiento")
+            val rejectedMessage = when {
+                qualityAnalysis.hasReflections -> "Evita los reflejos sobre la imagen"
+                qualityAnalysis.sharpness < 12f -> "La imagen está borrosa. Enfoca la radiografía"
+                isMoving -> "Mantén la cámara estable"
+                doc.areaRatio > ScannerConfig.MAX_AREA_RATIO -> "Aleja un poco la cámara"
+                doc.areaRatio < ScannerConfig.MIN_AREA_RATIO -> "Acerca un poco la cámara"
+                else -> "Ajusta la posición de la radiografía"
+            }
+            Log.d("XRayScanner", "Evaluación REJECTED: GlobalScore=$globalScore, Geo=$geometryScore, Illum=$illuminationScore, Sharp=$sharpnessScore")
             return EvaluatorResult(
-                state = CaptureQualityState.UNSTABLE,
-                guidanceMessage = "Mantén la cámara estable",
+                state = CaptureQualityState.VERIFYING,
+                level = QualityLevel.REJECTED,
+                globalScore = globalScore,
+                guidanceMessage = rejectedMessage,
                 isShutterEnabled = false,
                 detectedDocument = doc,
                 frameQualityState = FrameQualityState.Warning
             )
         }
 
-        // 6. Estabilización temporal: requiere fotogramas válidos consecutivos (~1.5 segundos)
+        // Estabilización temporal suave (~0.8s)
         consecutiveValidFrames++
 
-        return if (consecutiveValidFrames >= 3) {
-            Log.d("XRayScanner", "Evaluación READY: Radiografía lista para capturar (Fotogramas=$consecutiveValidFrames)")
-            EvaluatorResult(
-                state = CaptureQualityState.READY,
-                guidanceMessage = "Radiografía lista para capturar",
-                isShutterEnabled = true,
-                detectedDocument = doc,
-                frameQualityState = FrameQualityState.Acceptable
-            )
-        } else {
-            Log.d("XRayScanner", "Evaluación Verificando: Estabilizando fotogramas ($consecutiveValidFrames/3)")
-            EvaluatorResult(
-                state = CaptureQualityState.VERIFYING,
-                guidanceMessage = "Radiografía detectada. Mantén la cámara estable",
-                isShutterEnabled = false,
-                detectedDocument = doc,
-                frameQualityState = FrameQualityState.Warning
-            )
+        val isReady = consecutiveValidFrames >= ScannerConfig.REQUIRED_STABLE_FRAMES
+
+        val finalMessage = when {
+            !isReady -> "Verificando los bordes de la radiografía..."
+            level == QualityLevel.EXCELLENT -> "Excelente encuadre. Lista para capturar"
+            else -> "Imagen aceptable. Puedes capturar"
         }
+
+        Log.d("XRayScanner", "Evaluación ÉXITO: Level=$level, GlobalScore=$globalScore, ShutterEnabled=$isReady, Fotogramas=$consecutiveValidFrames")
+
+        return EvaluatorResult(
+            state = if (isReady) CaptureQualityState.READY else CaptureQualityState.VERIFYING,
+            level = level,
+            globalScore = globalScore,
+            guidanceMessage = finalMessage,
+            isShutterEnabled = isReady,
+            detectedDocument = doc,
+            frameQualityState = if (level == QualityLevel.EXCELLENT) FrameQualityState.Acceptable else FrameQualityState.Warning
+        )
+    }
+
+    private fun computeGeometryScore(doc: DetectedDocument): Float {
+        val confPts = (doc.confidence * 40f).coerceIn(0f, 40f)
+        val areaPts = if (doc.areaRatio in ScannerConfig.MIN_AREA_RATIO..ScannerConfig.MAX_AREA_RATIO) 30f else 10f
+        val centerPts = ((1f - (kotlin.math.abs(doc.centerOffset.x) + kotlin.math.abs(doc.centerOffset.y)) / 2f) * 15f).coerceIn(0f, 15f)
+        val tiltPts = if (!doc.isTilted) 15f else 5f
+        return (confPts + areaPts + centerPts + tiltPts).coerceIn(0f, 100f)
+    }
+
+    private fun computeIlluminationScore(quality: ImageQualityAnalysis): Float {
+        val bright = quality.brightness
+        if (bright == 0f) return 80f
+        val brightScore = ((1f - kotlin.math.abs(bright - 125f) / 125f) * 100f).coerceIn(0f, 100f)
+        val reflectionPenalty = if (quality.hasReflections) 25f else 0f
+        return (brightScore - reflectionPenalty).coerceIn(0f, 100f)
+    }
+
+    private fun computeSharpnessScore(sharpness: Float): Float {
+        if (sharpness == 0f) return 80f
+        return ((sharpness / 25f) * 100f).coerceIn(0f, 100f)
     }
 
     private fun isCameraMoving(bitmap: Bitmap): Boolean {
@@ -260,7 +224,7 @@ class CaptureQualityEvaluator(
             }
 
             val avgDiff = diffSum.toFloat() / currentPixels.size
-            avgDiff > 20f
+            avgDiff > 22f
         } catch (_: Exception) {
             false
         }
