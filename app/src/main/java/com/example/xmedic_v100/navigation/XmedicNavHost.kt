@@ -2,6 +2,7 @@ package com.example.xmedic_v100.navigation
 
 import android.net.Uri
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavHostController
@@ -11,6 +12,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.xmedic_v100.data.repository.AuthRepository
+import com.example.xmedic_v100.data.repository.UserProfileResult
 import com.example.xmedic_v100.data.repository.UserRepository
 import com.example.xmedic_v100.ui.screens.LoginScreen
 import com.example.xmedic_v100.ui.screens.RegisterScreen
@@ -20,6 +22,7 @@ import com.example.xmedic_v100.ui.screens.camera.CameraScannerScreen
 import com.example.xmedic_v100.ui.screens.main.MainContainerScreen
 import com.example.xmedic_v100.ui.screens.processing.ProcessingScreen
 import com.example.xmedic_v100.ui.screens.store.TokenStoreScreen
+import kotlinx.coroutines.launch
 
 sealed class Screen(val route: String) {
     object Splash : Screen("splash")
@@ -40,6 +43,7 @@ fun XmedicNavHost(
     navController: NavHostController = rememberNavController()
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     NavHost(
         navController = navController,
@@ -57,6 +61,11 @@ fun XmedicNavHost(
                     navController.navigate(Screen.Main.route) {
                         popUpTo(Screen.Splash.route) { inclusive = true }
                     }
+                },
+                onNavigateToRoleSelection = {
+                    navController.navigate(Screen.RoleSelection.route) {
+                        popUpTo(Screen.Splash.route) { inclusive = true }
+                    }
                 }
             )
         }
@@ -67,7 +76,18 @@ fun XmedicNavHost(
                     // Volver o salir
                 },
                 onLoginSuccess = {
-                    navController.navigate(Screen.RoleSelection.route)
+                    scope.launch {
+                        val profileResult = UserRepository(context).fetchUserProfileRemote()
+                        if (profileResult is UserProfileResult.HasRole) {
+                            navController.navigate(Screen.Main.route) {
+                                popUpTo(Screen.Login.route) { inclusive = true }
+                            }
+                        } else {
+                            navController.navigate(Screen.RoleSelection.route) {
+                                popUpTo(Screen.Login.route) { inclusive = true }
+                            }
+                        }
+                    }
                 },
                 onForgotPassword = {
                     // Restablecimiento procesado por ViewModel
@@ -89,8 +109,17 @@ fun XmedicNavHost(
                     }
                 },
                 onRegisterSuccess = {
-                    navController.navigate(Screen.RoleSelection.route) {
-                        popUpTo(Screen.Register.route) { inclusive = true }
+                    scope.launch {
+                        val profileResult = UserRepository(context).fetchUserProfileRemote()
+                        if (profileResult is UserProfileResult.HasRole) {
+                            navController.navigate(Screen.Main.route) {
+                                popUpTo(Screen.Register.route) { inclusive = true }
+                            }
+                        } else {
+                            navController.navigate(Screen.RoleSelection.route) {
+                                popUpTo(Screen.Register.route) { inclusive = true }
+                            }
+                        }
                     }
                 }
             )

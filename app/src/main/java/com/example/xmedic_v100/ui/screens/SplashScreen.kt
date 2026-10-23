@@ -28,6 +28,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -48,15 +49,25 @@ fun SplashScreen(
     viewModel: SplashViewModel = viewModel(),
     onNavigateToLogin: () -> Unit = {},
     onNavigateToHome: () -> Unit = {},
+    onNavigateToRoleSelection: () -> Unit = {},
     onTimeout: () -> Unit = {}
 ) {
+    val context = LocalContext.current
     val destination by viewModel.destination.collectAsStateWithLifecycle()
+
+    LaunchedEffect(Unit) {
+        viewModel.checkSessionAndNavigate(context)
+    }
 
     // Manejo de la redirección según el estado de la sesión validado por SplashViewModel
     LaunchedEffect(destination) {
         when (destination) {
             SplashDestination.Login -> {
                 onNavigateToLogin()
+                onTimeout()
+            }
+            SplashDestination.RoleSelection -> {
+                onNavigateToRoleSelection()
                 onTimeout()
             }
             SplashDestination.Home -> {

@@ -3,6 +3,7 @@ package com.example.xmedic_v100.ui.components
 import android.graphics.PointF
 import android.net.Uri
 import android.util.Log
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
@@ -45,6 +46,7 @@ fun CameraView(
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
     val evaluator = remember { CaptureQualityEvaluator() }
 
+    var camera by remember { mutableStateOf<Camera?>(null) }
     var latestCorners by remember { mutableStateOf<List<PointF>?>(null) }
 
     val previewView = remember { PreviewView(context) }
@@ -67,7 +69,7 @@ fun CameraView(
             }
     }
 
-    // Vincular CameraX al ciclo de vida
+    // Vincular CameraX al ciclo de vida y guardar la instancia de Camera
     LaunchedEffect(Unit) {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
@@ -80,7 +82,7 @@ fun CameraView(
                 val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
                 cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(
+                camera = cameraProvider.bindToLifecycle(
                     lifecycleOwner,
                     cameraSelector,
                     preview,
@@ -93,12 +95,15 @@ fun CameraView(
         }, executor)
     }
 
-    // Control de Flash
-    LaunchedEffect(isFlashOn) {
-        imageCapture.flashMode = if (isFlashOn) {
-            ImageCapture.FLASH_MODE_ON
-        } else {
-            ImageCapture.FLASH_MODE_OFF
+    // Control de Linterna / Antorcha física mediante CameraControl.enableTorch()
+    LaunchedEffect(isFlashOn, camera) {
+        val activeCamera = camera
+        if (activeCamera != null && activeCamera.cameraInfo.hasFlashUnit()) {
+            try {
+                activeCamera.cameraControl.enableTorch(isFlashOn)
+            } catch (e: Exception) {
+                Log.e("CameraView", "Error al activar antorcha/linterna", e)
+            }
         }
     }
 
@@ -128,8 +133,12 @@ fun CameraView(
         }
     }
 
+    // Apagar linterna al abandonar la pantalla
     DisposableEffect(Unit) {
         onDispose {
+            try {
+                camera?.cameraControl?.enableTorch(false)
+            } catch (_: Exception) {}
             evaluator.reset()
             cameraExecutor.shutdown()
         }

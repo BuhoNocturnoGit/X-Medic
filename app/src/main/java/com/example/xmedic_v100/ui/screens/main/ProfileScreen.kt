@@ -22,13 +22,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.outlined.TextSnippet
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Payment
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.automirrored.outlined.TextSnippet
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -36,8 +39,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -49,6 +56,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.xmedic_v100.data.repository.UserRepository
+import com.example.xmedic_v100.ui.screens.UserRole
 import com.example.xmedic_v100.ui.theme.DarkNavy
 import com.example.xmedic_v100.ui.theme.PrimaryTeal
 import com.example.xmedic_v100.ui.theme.SurfaceWhite
@@ -60,13 +68,99 @@ fun ProfileScreen(
     onSignOut: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    val userRepository = UserRepository(context)
+    val userRepository = remember { UserRepository(context) }
     val userName = userRepository.getUserDisplayName()
-    val userRole = userRepository.getUserRole()
     val tokenCount = userRepository.getTokenCount()
     val userInitials = userRepository.getUserInitials()
 
+    var userRole by remember { mutableStateOf(userRepository.getUserRole()) }
+    var showRoleChangeDialog by remember { mutableStateOf(false) }
+    var selectedDialogRole by remember { mutableStateOf(userRole) }
+    var updateMessage by remember { mutableStateOf<String?>(null) }
+
     val scrollState = rememberScrollState()
+
+    if (showRoleChangeDialog) {
+        AlertDialog(
+            onDismissRequest = { showRoleChangeDialog = false },
+            title = {
+                Text(
+                    text = "Cambiar Tipo de Perfil",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
+                    color = DarkNavy
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Selecciona el nuevo tipo de perfil para tu cuenta:",
+                        fontSize = 13.sp,
+                        color = TextSlate
+                    )
+                    UserRole.entries.forEach { role ->
+                        val isSelected = selectedDialogRole == role
+                        Surface(
+                            color = if (isSelected) Color(0xFFE8F6F7) else SurfaceWhite,
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, if (isSelected) PrimaryTeal else Color(0xFFE2EDF0)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { selectedDialogRole = role }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = role.title,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp,
+                                        color = DarkNavy
+                                    )
+                                    Text(
+                                        text = role.description,
+                                        fontSize = 11.sp,
+                                        color = TextSlate
+                                    )
+                                }
+                                if (isSelected) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = "Seleccionado",
+                                        tint = PrimaryTeal,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        userRepository.saveUserRole(selectedDialogRole)
+                        userRole = selectedDialogRole
+                        showRoleChangeDialog = false
+                        updateMessage = "Tipo de perfil actualizado correctamente"
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryTeal)
+                ) {
+                    Text("Guardar cambios", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRoleChangeDialog = false }) {
+                    Text("Cancelar", color = TextSlate)
+                }
+            },
+            containerColor = SurfaceWhite,
+            shape = RoundedCornerShape(20.dp)
+        )
+    }
 
     Box(
         modifier = Modifier
@@ -109,6 +203,27 @@ fun ProfileScreen(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
+
+            // Banner para mostrar confirmación de cambio de perfil
+            updateMessage?.let { msg ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFFDCFCE7))
+                        .padding(12.dp)
+                ) {
+                    Text(
+                        text = msg,
+                        color = Color(0xFF166534),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
 
             // Card Usuario (Iniciales, Nombre, Rol Badge, Editar)
             Surface(
@@ -153,10 +268,14 @@ fun ProfileScreen(
 
                             Spacer(modifier = Modifier.height(4.dp))
 
-                            // Rol Badge
+                            // Rol Badge (Clickable para cambiar)
                             Surface(
                                 color = Color(0xFFE8F6F7),
-                                shape = RoundedCornerShape(50)
+                                shape = RoundedCornerShape(50),
+                                modifier = Modifier.clickable {
+                                    selectedDialogRole = userRole
+                                    showRoleChangeDialog = true
+                                }
                             ) {
                                 Text(
                                     text = userRole.title,
@@ -171,7 +290,10 @@ fun ProfileScreen(
 
                     // Botón Editar
                     IconButton(
-                        onClick = { },
+                        onClick = {
+                            selectedDialogRole = userRole
+                            showRoleChangeDialog = true
+                        },
                         modifier = Modifier
                             .size(36.dp)
                             .clip(CircleShape)
@@ -334,6 +456,15 @@ fun ProfileScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                    SettingRowItem(
+                        icon = Icons.Outlined.Person,
+                        title = "Tipo de perfil (${userRole.title})",
+                        onClick = {
+                            selectedDialogRole = userRole
+                            showRoleChangeDialog = true
+                        }
+                    )
+                    HorizontalDivider(color = Color(0xFFF1F5F9), modifier = Modifier.padding(horizontal = 16.dp))
                     SettingRowItem(icon = Icons.Outlined.Security, title = "Cuenta y seguridad")
                     HorizontalDivider(color = Color(0xFFF1F5F9), modifier = Modifier.padding(horizontal = 16.dp))
                     SettingRowItem(icon = Icons.Outlined.Notifications, title = "Notificaciones")
@@ -355,7 +486,10 @@ fun ProfileScreen(
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
-                        onClick = onSignOut
+                        onClick = {
+                            userRepository.clearLocalData()
+                            onSignOut()
+                        }
                     )
                     .padding(vertical = 12.dp),
                 contentAlignment = Alignment.Center
