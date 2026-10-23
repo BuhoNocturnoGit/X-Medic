@@ -1,6 +1,5 @@
 package com.example.xmedic_v100.ui.components
 
-import android.content.Context
 import android.net.Uri
 import android.util.Log
 import androidx.camera.core.CameraSelector
@@ -21,8 +20,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import com.example.xmedic_v100.utils.CaptureQualityEvaluator
+import com.example.xmedic_v100.utils.EvaluatorResult
 import com.example.xmedic_v100.utils.ImageProcessor
-import com.example.xmedic_v100.utils.ImageQualityAnalysis
 import java.io.File
 import java.util.concurrent.Executors
 
@@ -31,7 +31,7 @@ fun CameraView(
     modifier: Modifier = Modifier,
     isFlashOn: Boolean = false,
     triggerCapture: Boolean = false,
-    onQualityAnalyzed: (ImageQualityAnalysis) -> Unit = {},
+    onEvaluatorResult: (EvaluatorResult) -> Unit = {},
     onImageCaptured: (Uri) -> Unit = {},
     onCaptureHandled: () -> Unit = {}
 ) {
@@ -39,6 +39,7 @@ fun CameraView(
     val lifecycleOwner = LocalLifecycleOwner.current
     val executor = remember { ContextCompat.getMainExecutor(context) }
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
+    val evaluator = remember { CaptureQualityEvaluator() }
 
     val previewView = remember { PreviewView(context) }
     val imageCapture = remember {
@@ -52,7 +53,7 @@ fun CameraView(
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .build().apply {
                 setAnalyzer(cameraExecutor) { imageProxy ->
-                    analyzeFrame(imageProxy, onQualityAnalyzed)
+                    analyzeFrame(imageProxy, evaluator, onEvaluatorResult)
                 }
             }
     }
@@ -120,6 +121,7 @@ fun CameraView(
 
     DisposableEffect(Unit) {
         onDispose {
+            evaluator.reset()
             cameraExecutor.shutdown()
         }
     }
@@ -130,14 +132,18 @@ fun CameraView(
     )
 }
 
-private fun analyzeFrame(imageProxy: ImageProxy, onQualityAnalyzed: (ImageQualityAnalysis) -> Unit) {
+private fun analyzeFrame(
+    imageProxy: ImageProxy,
+    evaluator: CaptureQualityEvaluator,
+    onEvaluatorResult: (EvaluatorResult) -> Unit
+) {
     try {
         val bitmap = imageProxy.toBitmap()
         if (bitmap != null) {
-            val analysis = ImageProcessor.analyzeBitmapQuality(bitmap)
-            onQualityAnalyzed(analysis)
+            val result = evaluator.evaluateFrame(bitmap)
+            onEvaluatorResult(result)
         }
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         // Manejo silencioso de análisis de frames
     } finally {
         imageProxy.close()

@@ -28,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.outlined.FlashOn
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -64,8 +65,8 @@ import com.example.xmedic_v100.ui.theme.ClinicalSurfaceBase
 import com.example.xmedic_v100.ui.theme.ClinicalSurfaceElevated
 import com.example.xmedic_v100.ui.theme.ClinicalTextHighContrast
 import com.example.xmedic_v100.ui.theme.ClinicalTextMuted
-import com.example.xmedic_v100.utils.FrameQualityState
-import com.example.xmedic_v100.utils.ImageQualityAnalysis
+import com.example.xmedic_v100.utils.CaptureQualityState
+import com.example.xmedic_v100.utils.EvaluatorResult
 
 @Composable
 fun CameraScannerScreen(
@@ -82,7 +83,9 @@ fun CameraScannerScreen(
     var scanProgress by remember { mutableStateOf(0f) }
     var triggerHardwareCapture by remember { mutableStateOf(false) }
 
-    var qualityAnalysis by remember { mutableStateOf(ImageQualityAnalysis()) }
+    var evaluatorResult by remember { mutableStateOf(EvaluatorResult()) }
+    var isManualOverride by remember { mutableStateOf(false) }
+
     var capturedImageUri by remember { mutableStateOf<Uri?>(null) }
     var showConfirmationStep by remember { mutableStateOf(false) }
 
@@ -115,13 +118,15 @@ fun CameraScannerScreen(
         }
     }
 
+    val isShutterEnabled = evaluatorResult.isShutterEnabled || isManualOverride
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(ClinicalBgCanvas)
     ) {
         if (showConfirmationStep && capturedImageUri != null) {
-            // Paso 9: Confirmación de Imagen
+            // Paso 17: Pantalla / Vista de Confirmación de Imagen
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -172,7 +177,9 @@ fun CameraScannerScreen(
                             containerColor = ClinicalSurfaceElevated,
                             contentColor = Color.White
                         ),
-                        modifier = Modifier.weight(1f).height(50.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(50.dp),
                         shape = RoundedCornerShape(14.dp)
                     ) {
                         Text("Volver a tomar", fontWeight = FontWeight.Bold)
@@ -186,7 +193,9 @@ fun CameraScannerScreen(
                             containerColor = ClinicalPrimary,
                             contentColor = Color(0xFF0B131E)
                         ),
-                        modifier = Modifier.weight(1f).height(50.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(50.dp),
                         shape = RoundedCornerShape(14.dp)
                     ) {
                         Text("Usar esta imagen", fontWeight = FontWeight.Bold)
@@ -271,11 +280,21 @@ fun CameraScannerScreen(
                         .padding(horizontal = 20.dp, vertical = 8.dp)
                 ) {
                     Text(
-                        text = qualityAnalysis.guidanceMessage,
-                        color = when (qualityAnalysis.state) {
-                            FrameQualityState.Acceptable -> ClinicalPrimary
-                            FrameQualityState.Warning -> Color(0xFFF59E0B)
-                            FrameQualityState.Insufficient -> Color(0xFFEF4444)
+                        text = evaluatorResult.guidanceMessage,
+                        color = when (evaluatorResult.state) {
+                            CaptureQualityState.READY -> ClinicalPrimary
+                            CaptureQualityState.VERIFYING,
+                            CaptureQualityState.TOO_CLOSE,
+                            CaptureQualityState.TOO_FAR,
+                            CaptureQualityState.MISALIGNED_LEFT,
+                            CaptureQualityState.MISALIGNED_RIGHT,
+                            CaptureQualityState.MISALIGNED_TOP,
+                            CaptureQualityState.MISALIGNED_BOTTOM,
+                            CaptureQualityState.TILTED,
+                            CaptureQualityState.GLARE_DETECTED,
+                            CaptureQualityState.BLUR_DETECTED,
+                            CaptureQualityState.UNSTABLE -> Color(0xFFF59E0B)
+                            else -> Color(0xFFEF4444)
                         },
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium,
@@ -301,8 +320,8 @@ fun CameraScannerScreen(
                             modifier = Modifier.fillMaxSize(),
                             isFlashOn = isFlashOn,
                             triggerCapture = triggerHardwareCapture,
-                            onQualityAnalyzed = { analysis ->
-                                qualityAnalysis = analysis
+                            onEvaluatorResult = { result ->
+                                evaluatorResult = result
                             },
                             onImageCaptured = { uri ->
                                 triggerHardwareCapture = false
@@ -331,40 +350,10 @@ fun CameraScannerScreen(
 
                     XRayAlignmentOverlay(
                         modifier = Modifier.fillMaxSize(),
-                        qualityState = qualityAnalysis.state,
+                        qualityState = evaluatorResult.frameQualityState,
                         isScanning = isScanning,
                         scanProgress = scanProgress
                     )
-
-                    // Watermark "● SÓCRATES AI"
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 14.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color(0xCC0D141D))
-                            .border(1.dp, ClinicalPrimary.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
-                            .padding(horizontal = 12.dp, vertical = 4.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .clip(CircleShape)
-                                    .background(ClinicalPrimary)
-                            )
-                            Text(
-                                text = "SÓCRATES AI",
-                                color = Color.White,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 1.sp
-                            )
-                        }
-                    }
 
                     if (isScanning) {
                         Box(
@@ -397,14 +386,14 @@ fun CameraScannerScreen(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
-                    text = "Evita reflejos y mantén la imagen completamente visible.",
+                    text = "Evita reflejos y mantén la radiografía completamente visible.",
                     color = ClinicalTextMuted,
                     fontSize = 12.sp,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.padding(horizontal = 16.dp)
                 )
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
                 // Bottom Controls
                 Row(
@@ -444,11 +433,13 @@ fun CameraScannerScreen(
                         )
                     }
 
-                    // Botón Shutter
+                    // Botón Shutter (Se habilita ÚNICAMENTE cuando isShutterEnabled es true)
                     val shutterScale by animateFloatAsState(
                         targetValue = if (isScanning) 0.92f else 1f,
                         label = "shutterScale"
                     )
+
+                    val shutterColor = if (isShutterEnabled) ClinicalPrimary else Color(0xFF475569)
 
                     Box(
                         modifier = Modifier
@@ -456,8 +447,8 @@ fun CameraScannerScreen(
                             .size(78.dp)
                             .scale(shutterScale)
                             .clip(CircleShape)
-                            .border(3.5.dp, Color.White, CircleShape)
-                            .clickable(enabled = !isScanning) {
+                            .border(3.5.dp, if (isShutterEnabled) Color.White else Color(0xFF64748B), CircleShape)
+                            .clickable(enabled = !isScanning && isShutterEnabled) {
                                 triggerHardwareCapture = true
                             }
                             .padding(5.dp),
@@ -467,15 +458,24 @@ fun CameraScannerScreen(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .clip(CircleShape)
-                                .background(Color.White),
+                                .background(if (isShutterEnabled) Color.White else Color(0xFF334155)),
                             contentAlignment = Alignment.Center
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .clip(CircleShape)
-                                    .background(ClinicalPrimary)
-                            )
+                            if (isShutterEnabled) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(CircleShape)
+                                        .background(shutterColor)
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.Lock,
+                                    contentDescription = "Bloqueado",
+                                    tint = Color(0xFF94A3B8),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
                     }
 
@@ -514,7 +514,23 @@ fun CameraScannerScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Toggle para Modo Manual Override (Recuperación)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { isManualOverride = !isManualOverride }
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = if (isManualOverride) "Modo manual activado" else "Forzar captura manual",
+                        color = if (isManualOverride) ClinicalPrimary else ClinicalTextMuted,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
 
                 // Footer Token Button
                 Text(
