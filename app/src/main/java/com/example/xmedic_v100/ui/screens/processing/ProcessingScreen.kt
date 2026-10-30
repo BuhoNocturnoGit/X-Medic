@@ -92,6 +92,7 @@ fun ProcessingScreen(
         ProcessingUiState.RunningInference -> 0.80f
         ProcessingUiState.SavingResult -> 0.95f
         is ProcessingUiState.Completed -> 1.0f
+        is ProcessingUiState.ClinicalModelMissing -> 0.0f
         is ProcessingUiState.Error -> 0.0f
     }
 
@@ -99,10 +100,11 @@ fun ProcessingScreen(
         ProcessingUiState.Idle -> "Inicializando..."
         ProcessingUiState.ValidatingImage -> "Validando imagen..."
         ProcessingUiState.CheckingTokens -> "Verificando tokens..."
-        ProcessingUiState.Preprocessing -> "Preprocesando matriz..."
-        ProcessingUiState.RunningInference -> "Ejecutando inferencia TFLite..."
+        ProcessingUiState.Preprocessing -> "Preprocesando..."
+        ProcessingUiState.RunningInference -> "Ejecutando inferencia..."
         ProcessingUiState.SavingResult -> "Guardando resultados..."
         is ProcessingUiState.Completed -> "Procesamiento completado"
+        is ProcessingUiState.ClinicalModelMissing -> "Análisis clínico no disponible"
         is ProcessingUiState.Error -> "Error en el procesamiento"
     }
 
@@ -144,7 +146,7 @@ fun ProcessingScreen(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "Xmedic AI v2.4",
+                    text = "Xmedic Core",
                     color = MaterialTheme.colorScheme.primary,
                     style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
                 )
@@ -165,13 +167,13 @@ fun ProcessingScreen(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text = "Analizando imagen",
+                text = "Procesamiento de imagen",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface
             )
             Text(
-                text = "La IA está identificando patrones en la radiografía.",
+                text = "Verificando disponibilidad de modelos locales.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 2.dp)
@@ -220,14 +222,14 @@ fun ProcessingScreen(
                             .padding(horizontal = 12.dp, vertical = 4.dp)
                     ) {
                         Text(
-                            text = "ESCANEO ACTIVO",
+                            text = "IMAGEN CAPTURADA",
                             color = Color.White,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
                     Text(
-                        text = "FOV: AP-THORAX",
+                        text = "FOV: RADIOGRAFÍA",
                         color = Color(0xFF59D8E5),
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
@@ -264,8 +266,8 @@ fun ProcessingScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("X-RAY DENSITY: 1.42 g/cm²", color = Color.White.copy(alpha = 0.7f), fontSize = 10.sp)
-                    Text("SLICE: 14/32", color = Color.White.copy(alpha = 0.7f), fontSize = 10.sp)
+                    Text("ESTADO: REGISTRADA", color = Color.White.copy(alpha = 0.7f), fontSize = 10.sp)
+                    Text("XMEDIC VISION v1.0", color = Color.White.copy(alpha = 0.7f), fontSize = 10.sp)
                 }
             }
 
@@ -317,7 +319,7 @@ fun ProcessingScreen(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "COMPLETADO",
+                        text = if (uiState is ProcessingUiState.ClinicalModelMissing) "SIN MODELO" else "PROCESANDO",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 9.sp
@@ -334,6 +336,12 @@ fun ProcessingScreen(
                 color = MaterialTheme.colorScheme.onSurface
             )
 
+            val tokensConsumedText = if (uiState is ProcessingUiState.ClinicalModelMissing) {
+                "0 Tokens consumidos · saldo restante: $currentTokens"
+            } else {
+                "1 Token consumido · saldo restante: $currentTokens"
+            }
+
             Row(
                 modifier = Modifier
                     .padding(top = 8.dp)
@@ -344,14 +352,14 @@ fun ProcessingScreen(
                 Box(
                     modifier = Modifier
                         .size(20.dp)
-                        .background(MaterialTheme.colorScheme.error, CircleShape),
+                        .background(if (uiState is ProcessingUiState.ClinicalModelMissing) PrimaryTeal else MaterialTheme.colorScheme.error, CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("T", color = MaterialTheme.colorScheme.onError, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    Text("T", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 }
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "1 Token consumido · saldo restante: $currentTokens",
+                    text = tokensConsumedText,
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -362,6 +370,51 @@ fun ProcessingScreen(
 
         // Contenido según el estado final
         when (val state = uiState) {
+            is ProcessingUiState.ClinicalModelMissing -> {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Surface(
+                        color = Color(0xFFFEF3C7),
+                        shape = RoundedCornerShape(14.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFDE68A)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Text(
+                                text = "Análisis clínico no disponible",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = Color(0xFF92400E)
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = state.message,
+                                fontSize = 12.sp,
+                                color = Color(0xFF78350F),
+                                lineHeight = 16.sp
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(18.dp))
+
+                    Button(
+                        onClick = onProcessingComplete,
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryTeal, contentColor = Color.White),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp)
+                    ) {
+                        Text("Guardar fotografía y finalizar", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
             is ProcessingUiState.Error -> {
                 Box(
                     modifier = Modifier
@@ -390,43 +443,26 @@ fun ProcessingScreen(
                         .padding(horizontal = 20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    if (!result.isModelAvailable) {
-                        Surface(
-                            color = Color(0xFFFEF3C7),
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
+                    Surface(
+                        color = Color(0xFFDCFCE7),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
                             Text(
-                                text = result.statusMessage,
-                                color = Color(0xFF92400E),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.padding(12.dp)
+                                text = "Hallazgos de IA (xmedic_model.tflite):",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = Color(0xFF166534)
                             )
-                        }
-                    } else {
-                        Surface(
-                            color = Color(0xFFDCFCE7),
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(modifier = Modifier.padding(14.dp)) {
-                                Text(
-                                    text = "Hallazgos de IA (xmedic_model.tflite):",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp,
-                                    color = Color(0xFF166534)
-                                )
-                                Spacer(modifier = Modifier.height(6.dp))
-                                result.findings.forEach { finding ->
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Text(finding.label, fontSize = 12.sp, color = DarkNavy)
-                                        Text("${(finding.confidence * 100).toInt()}%", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = PrimaryTeal)
-                                    }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            result.findings.forEach { finding ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(finding.label, fontSize = 12.sp, color = DarkNavy)
+                                    Text("${(finding.confidence * 100).toInt()}%", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = PrimaryTeal)
                                 }
                             }
                         }

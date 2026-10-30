@@ -67,6 +67,7 @@ import com.example.xmedic_v100.ui.theme.ClinicalTextHighContrast
 import com.example.xmedic_v100.ui.theme.ClinicalTextMuted
 import com.example.xmedic_v100.utils.CaptureQualityState
 import com.example.xmedic_v100.utils.EvaluatorResult
+import com.example.xmedic_v100.utils.RadiographClassifier
 
 @Composable
 fun CameraScannerScreen(
@@ -76,6 +77,7 @@ fun CameraScannerScreen(
 ) {
     val context = LocalContext.current
     val userRepository = remember { UserRepository(context) }
+    val classifier = remember { RadiographClassifier(context) }
     val tokens = userRepository.getTokenCount()
 
     var isFlashOn by remember { mutableStateOf(false) }
@@ -109,17 +111,19 @@ fun CameraScannerScreen(
         }
     }
 
-    // Android Photo Picker para Galería
+    // Android Photo Picker para Galería con prueba explícita TFLite
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
+            // Ejecutar clasificación TFLite explícita sobre el archivo JPG seleccionado para comparar con Colab
+            classifier.classifyJpgFromUri(uri)
             capturedImageUri = uri
             showConfirmationStep = true
         }
     }
 
-    val isShutterEnabled = evaluatorResult.isShutterEnabled || isManualOverride
+    val isShutterEnabled = evaluatorResult.isShutterEnabled || isManualOverride || evaluatorResult.state == CaptureQualityState.READY
 
     Box(
         modifier = Modifier

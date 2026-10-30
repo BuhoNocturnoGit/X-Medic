@@ -2,6 +2,7 @@ package com.example.xmedic_v100.ui.viewmodel
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.xmedic_v100.data.model.AnalysisResult
@@ -23,6 +24,7 @@ sealed interface ProcessingUiState {
     object RunningInference : ProcessingUiState
     object SavingResult : ProcessingUiState
     data class Completed(val result: AnalysisResult) : ProcessingUiState
+    data class ClinicalModelMissing(val imageUri: Uri, val message: String) : ProcessingUiState
     data class Error(val message: String) : ProcessingUiState
 }
 
@@ -34,24 +36,32 @@ class ProcessingViewModel : ViewModel() {
     private var tokenDeducted = false
 
     fun processImage(context: Context, imageUri: Uri) {
-        if (_uiState.value !is ProcessingUiState.Idle) return // Prevenir ejecuciones múltiples simultáneas
+        if (_uiState.value !is ProcessingUiState.Idle) return
 
         val userRepository = UserRepository(context)
         val classifierHelper = ImageClassifierHelper(context)
 
         viewModelScope.launch {
             try {
-                // 1. Validar imagen
+                // 1. Verificar primero si el modelo clínico xmedic_model.tflite está disponible en assets
+                if (!classifierHelper.isModelAvailable()) {
+                    Log.d("XMEDIC_AI", "Modelo clínico 'xmedic_model.tflite' no disponible en assets. Omitiendo deducción de tokens.")
+                    _uiState.value = ProcessingUiState.ClinicalModelMissing(
+                        imageUri = imageUri,
+                        message = "Análisis clínico no disponible. El modelo de diagnóstico (xmedic_model.tflite) no se encuentra instalado en la aplicación. Tu imagen se ha guardado correctamente y NO se han descontado tokens."
+                    )
+                    return@launch
+                }
+
+                // 2. Validar imagen
                 _uiState.value = ProcessingUiState.ValidatingImage
                 withContext(Dispatchers.IO) {
                     val inputStream = context.contentResolver.openInputStream(imageUri)
-                    if (inputStream == null) {
-                        throw IllegalArgumentException("No se pudo abrir la imagen capturada.")
-                    }
+                        ?: throw IllegalArgumentException("No se pudo abrir la imagen capturada.")
                     inputStream.close()
                 }
 
-                // 2. Verificar tokens reales
+                // 3. Verificar tokens
                 _uiState.value = ProcessingUiState.CheckingTokens
                 val currentTokens = userRepository.getTokenCount()
                 if (currentTokens <= 0) {
@@ -59,13 +69,13 @@ class ProcessingViewModel : ViewModel() {
                     return@launch
                 }
 
-                // 3. Descontar exactamente 1 token transaccionalmente
+                // 4. Descontar token SOLO cuando se ejecutará el análisis clínico real
                 if (!tokenDeducted) {
                     userRepository.saveTokenCount(currentTokens - 1)
                     tokenDeducted = true
                 }
 
-                // 4. Preprocesamiento e Inferencia TFLite offline en segundo plano
+                // 5. Preprocesamiento e Inferencia TFLite
                 _uiState.value = ProcessingUiState.Preprocessing
                 _uiState.value = ProcessingUiState.RunningInference
 
@@ -73,7 +83,6 @@ class ProcessingViewModel : ViewModel() {
                     classifierHelper.runInferenceOnImage(imageUri)
                 }
 
-                // 5. Interpretar resultado
                 _uiState.value = ProcessingUiState.SavingResult
 
                 when (inferenceResult) {
@@ -90,32 +99,27 @@ class ProcessingViewModel : ViewModel() {
                     }
 
                     is InferenceResult.ModelMissing -> {
-                        val analysisResult = AnalysisResult(
+                        if (tokenDeducted) {
+                            userRepository.saveTokenCount(userRepository.getTokenCount() + 1)
+                            tokenDeducted = false
+                        }
+                        _uiState.value = ProcessingUiState.ClinicalModelMissing(
                             imageUri = imageUri,
-                            modelVersion = "Sin modelo local",
-                            findings = emptyList(),
-                            tokensConsumed = 1,
-                            statusMessage = inferenceResult.message,
-                            isModelAvailable = false
+                            message = "Análisis clínico no disponible."
                         )
-                        _uiState.value = ProcessingUiState.Completed(analysisResult)
                     }
 
                     is InferenceResult.Error -> {
-                        // Política de reembolso: si falla la inferencia, se devuelve el token
                         if (tokenDeducted) {
-                            val restoredTokens = userRepository.getTokenCount() + 1
-                            userRepository.saveTokenCount(restoredTokens)
+                            userRepository.saveTokenCount(userRepository.getTokenCount() + 1)
                             tokenDeducted = false
                         }
                         _uiState.value = ProcessingUiState.Error("Error en procesamiento: ${inferenceResult.message}")
                     }
                 }
             } catch (e: Exception) {
-                // Política de reverso ante excepción técnica
                 if (tokenDeducted) {
-                    val restoredTokens = userRepository.getTokenCount() + 1
-                    userRepository.saveTokenCount(restoredTokens)
+                    userRepository.saveTokenCount(userRepository.getTokenCount() + 1)
                     tokenDeducted = false
                 }
                 _uiState.value = ProcessingUiState.Error("Excepción en procesamiento: ${e.localizedMessage}")

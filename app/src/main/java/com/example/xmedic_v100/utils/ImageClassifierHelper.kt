@@ -22,7 +22,7 @@ sealed interface InferenceResult {
     ) : InferenceResult
 
     data class ModelMissing(
-        val message: String = "El modelo de IA (xmedic_model.tflite) no se encuentra en assets. Por favor agrega el modelo entrenado."
+        val message: String = "Análisis clínico no disponible. El modelo de diagnóstico (xmedic_model.tflite) no se encuentra instalado en la aplicación."
     ) : InferenceResult
 
     data class Error(
@@ -48,7 +48,7 @@ class ImageClassifierHelper(private val context: Context) {
     fun runInferenceOnImage(imageUri: Uri): InferenceResult {
         if (!isModelAvailable()) {
             return InferenceResult.ModelMissing(
-                "El modelo real de IA (xmedic_model.tflite) no se encuentra en la carpeta assets del proyecto. Agrega el modelo entrenado para obtener análisis clínicos reales."
+                "Análisis clínico no disponible. El modelo de diagnóstico (xmedic_model.tflite) no se encuentra instalado en la aplicación. No se han descontado tokens."
             )
         }
 
@@ -65,7 +65,6 @@ class ImageClassifierHelper(private val context: Context) {
                 interpreter = Interpreter(modelBuffer)
             }
 
-            // Preprocesamiento de tensor de entrada (ejemplo 224x224x3 Float)
             val inputSize = 224
             val scaledBitmap = Bitmap.createScaledBitmap(bitmap, inputSize, inputSize, true)
             val byteBuffer = ByteBuffer.allocateDirect(4 * inputSize * inputSize * 3)
@@ -83,7 +82,6 @@ class ImageClassifierHelper(private val context: Context) {
                 byteBuffer.putFloat(b)
             }
 
-            // Matriz de salida para 4 clases de clasificación
             val output = Array(1) { FloatArray(4) }
             interpreter?.run(byteBuffer, output)
 
