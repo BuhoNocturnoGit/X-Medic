@@ -1,0 +1,44 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Reglas para la colección de usuarios
+    match /users/{userId} {
+      // El usuario autenticado puede leer su propio perfil
+      allow read: if request.auth != null && request.auth.uid == userId;
+
+      // El usuario puede crear o actualizar su perfil básico (displayName, email, role, onboardingCompleted)
+      // PERO NO PUEDE MODIFICAR el campo 'tokens' ni 'tokensInitialized' desde el cliente Android.
+      allow create, update: if request.auth != null
+                            && request.auth.uid == userId
+                            && (!request.resource.data.keys().hasAny(['tokens', 'tokensInitialized'])
+                                || request.resource.data.tokens == resource.data.tokens);
+
+      allow delete: if false; // Los perfiles no se borran desde el cliente.
+    }
+
+    // Reglas para transacciones de tokens (administradas exclusivamente por el Backend Worker)
+    match /token_transactions/{transactionId} {
+      allow read: if request.auth != null && resource.data.uid == request.auth.uid;
+      allow write: if false; // Solo el backend Cloudflare Worker puede escribir transacciones.
+    }
+
+    // Reglas para operaciones de análisis médico
+    match /analysis_operations/{operationId} {
+      allow read: if request.auth != null && resource.data.uid == request.auth.uid;
+      allow write: if false; // Solo el backend Cloudflare Worker autoriza y descuenta los 5 tokens.
+    }
+
+    // Reglas para recompensas AdMob SSV
+    match /ad_rewards/{rewardId} {
+      allow read: if request.auth != null && resource.data.uid == request.auth.uid;
+      allow write: if false; // Solo el backend Cloudflare Worker acredita recompensas SSV.
+    }
+
+    // Reglas para sesiones de anuncios AdMob
+    match /ad_sessions/{sessionId} {
+      allow read: if request.auth != null && resource.data.uid == request.auth.uid;
+      allow write: if false; // Creadas exclusivamente por el backend Worker.
+    }
+  }
+}

@@ -6,6 +6,8 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.xmedic_v100.data.model.AnalysisResult
+import com.example.xmedic_v100.data.repository.ReserveTokensResult
+import com.example.xmedic_v100.data.repository.TokenBackendRepository
 import com.example.xmedic_v100.data.repository.UserRepository
 import com.example.xmedic_v100.utils.ImageClassifierHelper
 import com.example.xmedic_v100.utils.InferenceResult
@@ -15,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.UUID
 
 sealed interface ProcessingUiState {
     object Idle : ProcessingUiState
@@ -39,6 +42,7 @@ class ProcessingViewModel : ViewModel() {
         if (_uiState.value !is ProcessingUiState.Idle) return
 
         val userRepository = UserRepository(context)
+        val tokenBackendRepo = TokenBackendRepository(context)
         val classifierHelper = ImageClassifierHelper(context)
 
         viewModelScope.launch {
@@ -61,21 +65,36 @@ class ProcessingViewModel : ViewModel() {
                     inputStream.close()
                 }
 
-                // 3. Verificar tokens
+                // 3. Verificar tokens y solicitar reserva atómica de 5 tokens al backend seguro
                 _uiState.value = ProcessingUiState.CheckingTokens
-                val currentTokens = userRepository.getTokenCount()
-                if (currentTokens <= 0) {
-                    _uiState.value = ProcessingUiState.Error("No tienes tokens suficientes para realizar el análisis.")
-                    return@launch
+                val operationId = "op_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}"
+
+                val reserveResult = tokenBackendRepo.reserveAnalysisTokens(operationId)
+
+                when (reserveResult) {
+                    is ReserveTokensResult.InsufficientTokens -> {
+                        _uiState.value = ProcessingUiState.Error("No posees los 5 tokens requeridos para autorizar este análisis médico. Saldo actual: ${reserveResult.currentBalance}")
+                        return@launch
+                    }
+                    is ReserveTokensResult.Error -> {
+                        // Modo desarrollo / Red sin conexión con backend: Usar validación local como fallback
+                        val localTokens = userRepository.getTokenCount()
+                        if (localTokens < 5) {
+                            _uiState.value = ProcessingUiState.Error("No tienes tokens suficientes para realizar el análisis (requeridos: 5).")
+                            return@launch
+                        }
+                        if (!tokenDeducted) {
+                            userRepository.saveTokenCount(localTokens - 5)
+                            tokenDeducted = true
+                        }
+                    }
+                    is ReserveTokensResult.Success -> {
+                        userRepository.saveTokenCount(reserveResult.newBalance)
+                        tokenDeducted = true
+                    }
                 }
 
-                // 4. Descontar token SOLO cuando se ejecutará el análisis clínico real
-                if (!tokenDeducted) {
-                    userRepository.saveTokenCount(currentTokens - 1)
-                    tokenDeducted = true
-                }
-
-                // 5. Preprocesamiento e Inferencia TFLite
+                // 4. Preprocesamiento e Inferencia TFLite
                 _uiState.value = ProcessingUiState.Preprocessing
                 _uiState.value = ProcessingUiState.RunningInference
 
@@ -91,7 +110,7 @@ class ProcessingViewModel : ViewModel() {
                             imageUri = imageUri,
                             modelVersion = inferenceResult.modelVersion,
                             findings = inferenceResult.findings,
-                            tokensConsumed = 1,
+                            tokensConsumed = 5,
                             statusMessage = "Análisis completado exitosamente",
                             isModelAvailable = true
                         )
@@ -100,7 +119,7 @@ class ProcessingViewModel : ViewModel() {
 
                     is InferenceResult.ModelMissing -> {
                         if (tokenDeducted) {
-                            userRepository.saveTokenCount(userRepository.getTokenCount() + 1)
+                            userRepository.saveTokenCount(userRepository.getTokenCount() + 5)
                             tokenDeducted = false
                         }
                         _uiState.value = ProcessingUiState.ClinicalModelMissing(
@@ -111,7 +130,7 @@ class ProcessingViewModel : ViewModel() {
 
                     is InferenceResult.Error -> {
                         if (tokenDeducted) {
-                            userRepository.saveTokenCount(userRepository.getTokenCount() + 1)
+                            userRepository.saveTokenCount(userRepository.getTokenCount() + 5)
                             tokenDeducted = false
                         }
                         _uiState.value = ProcessingUiState.Error("Error en procesamiento: ${inferenceResult.message}")
@@ -119,7 +138,7 @@ class ProcessingViewModel : ViewModel() {
                 }
             } catch (e: Exception) {
                 if (tokenDeducted) {
-                    userRepository.saveTokenCount(userRepository.getTokenCount() + 1)
+                    userRepository.saveTokenCount(userRepository.getTokenCount() + 5)
                     tokenDeducted = false
                 }
                 _uiState.value = ProcessingUiState.Error("Excepción en procesamiento: ${e.localizedMessage}")

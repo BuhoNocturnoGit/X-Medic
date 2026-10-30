@@ -29,7 +29,7 @@ class RadiographClassifier(private val context: Context) {
 
     private var interpreter: Interpreter? = null
     private var isInitialized = false
-    private var confidenceThreshold = 0.65f // Umbral de confianza inicial calibrado para cámara real (Index 1 = radiografia)
+    private var confidenceThreshold = 0.90f // Umbral inicial de autocaptura: 90% (Index 1 = radiografia)
 
     init {
         try {
@@ -76,14 +76,23 @@ class RadiographClassifier(private val context: Context) {
             val pixels = IntArray(targetSize * targetSize)
             scaledBitmap.getPixels(pixels, 0, targetSize, 0, 0, targetSize, targetSize)
 
-            for (pixel in pixels) {
-                val r = (pixel shr 16) and 0xFF
-                val g = (pixel shr 8) and 0xFF
-                val b = pixel and 0xFF
-                inputBuffer.putFloat(r / 255.0f)
-                inputBuffer.putFloat(g / 255.0f)
-                inputBuffer.putFloat(b / 255.0f)
+
+            // El modelo espera [1, 3, 224, 224] = NCHW.
+            // Se escriben todos los R, después todos los G y todos los B.
+            for (channel in 0 until 3) {
+                for (pixel in pixels) {
+                    val value = when (channel) {
+                        0 -> (pixel shr 16) and 0xFF // Rojo
+                        1 -> (pixel shr 8) and 0xFF  // Verde
+                        else -> pixel and 0xFF       // Azul
+                    }
+
+                    inputBuffer.putFloat(value / 255.0f)
+                }
             }
+
+
+
 
             inputBuffer.rewind()
 

@@ -1,0 +1,11 @@
+name = "xmedic-token-backend"
+main = "src/index.ts"
+compatibility_date = "2024-11-01"
+
+[vars]
+FIREBASE_PROJECT_ID = "x-medic"
+ADMOB_REWARDED_AD_UNIT_ID = "ca-app-pub-3940256099942544/5224354917" # Test AdMob Rewarded Ad Unit ID
+
+# Los secretos de producción se configuran mediante CLI:
+# wrangler secret put FIREBASE_SERVICE_ACCOUNT_EMAIL
+# wrangler secret put FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY

@@ -33,7 +33,21 @@ class UserRepository(context: Context) {
         prefs.edit().putString("KEY_USER_ROLE", role.name).apply()
         prefs.edit().putBoolean("KEY_ONBOARDING_COMPLETED", true).apply()
 
-        val user = getCurrentUser() ?: return
+        val user = getCurrentUser()
+
+        if (user == null) {
+            Log.e(
+                "XMEDIC_NAV",
+                "No se guardó el perfil: todavía no existe una sesión Firebase"
+            )
+            return
+        }
+
+        Log.d(
+            "XMEDIC_NAV",
+            "Intentando guardar perfil en Firestore para UID=${user.uid}, rol=${role.name}"
+        )
+
         try {
             val db = FirebaseFirestore.getInstance()
             val userMap = mapOf(
