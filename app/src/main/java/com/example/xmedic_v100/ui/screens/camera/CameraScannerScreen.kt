@@ -67,7 +67,6 @@ import com.example.xmedic_v100.ui.theme.ClinicalTextHighContrast
 import com.example.xmedic_v100.ui.theme.ClinicalTextMuted
 import com.example.xmedic_v100.utils.CaptureQualityState
 import com.example.xmedic_v100.utils.EvaluatorResult
-import kotlinx.coroutines.delay
 
 @Composable
 fun CameraScannerScreen(
@@ -107,17 +106,6 @@ fun CameraScannerScreen(
     LaunchedEffect(Unit) {
         if (!hasCameraPermission) {
             permissionLauncher.launch(Manifest.permission.CAMERA)
-        }
-    }
-
-    // Temporizador de Captura Automática al alcanzar estado READY
-    LaunchedEffect(evaluatorResult.state, isAutoCaptureEnabled, showConfirmationStep) {
-        if (evaluatorResult.state == CaptureQualityState.READY && isAutoCaptureEnabled && !triggerHardwareCapture && !showConfirmationStep) {
-            delay(800L) // Estabilidad de 800ms antes del disparo automático
-            if (evaluatorResult.state == CaptureQualityState.READY && !triggerHardwareCapture && !showConfirmationStep) {
-                Log.d("XRayScanner", "Disparo de captura automática ejecutado tras estabilización")
-                triggerHardwareCapture = true
-            }
         }
     }
 
@@ -283,7 +271,7 @@ fun CameraScannerScreen(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // 2. Subtitle Guidance Pill
+                // 2. Subtitle Guidance Pill (Muestra "Radiografía encontrada" en confirmación de IA)
                 Box(
                     modifier = Modifier
                         .testTag("pill_alignment_guide")
@@ -306,14 +294,14 @@ fun CameraScannerScreen(
                             else -> Color(0xFFEF4444)
                         },
                         fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
+                        fontWeight = FontWeight.Bold,
                         textAlign = TextAlign.Center
                     )
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // 3. Viewfinder Container with real camera + XRayAlignmentOverlay
+                // 3. Viewfinder Container con CameraView en tiempo real + XRayAlignmentOverlay
                 Box(
                     modifier = Modifier
                         .testTag("viewfinder_box")
@@ -328,9 +316,16 @@ fun CameraScannerScreen(
                         CameraView(
                             modifier = Modifier.fillMaxSize(),
                             isFlashOn = isFlashOn,
+                            isAutoCaptureEnabled = isAutoCaptureEnabled,
                             triggerCapture = triggerHardwareCapture,
                             onEvaluatorResult = { result ->
                                 evaluatorResult = result
+                            },
+                            onAutoCaptureRequested = {
+                                if (!showConfirmationStep && !triggerHardwareCapture) {
+                                    Log.d("XRayScanner", "Solicitud de disparo automático inmediato recibida de CameraView.")
+                                    triggerHardwareCapture = true
+                                }
                             },
                             onImageCaptured = { uri ->
                                 triggerHardwareCapture = false
