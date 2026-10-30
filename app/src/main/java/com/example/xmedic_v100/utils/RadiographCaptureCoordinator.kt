@@ -33,6 +33,7 @@ class RadiographCaptureCoordinator {
      * Evalúa los resultados de TFLite AI, OpenCV y análisis de calidad.
      * La IA tiene PRIORIDAD ABSOLUTA sobre la exigencia de 4 esquinas perfectas de OpenCV.
      */
+    @Synchronized
     fun evaluate(
         aiResult: RadiographClassificationResult,
         openCvDoc: DetectedDocument,
@@ -40,6 +41,18 @@ class RadiographCaptureCoordinator {
         isAutoCaptureEnabled: Boolean
     ): CoordinatorDecision {
         val now = System.currentTimeMillis()
+
+        // Corrección 3: Evitar disparos duplicados si la fotografía ya fue capturada previamente
+        if (currentState == CoordinatorCaptureState.CAPTURED) {
+            return CoordinatorDecision(
+                state = CoordinatorCaptureState.CAPTURED,
+                guidanceMessage = "Fotografía capturada",
+                shouldTriggerCapture = false,
+                isAiPositive = aiResult.isRadiograph,
+                aiConfidence = aiResult.radiographConfidence,
+                timestamp = now
+            )
+        }
 
         if (isCaptureInProgress) {
             Log.d("XMEDIC_AI", "COORDINADOR: Captura en curso (isCaptureInProgress=true). Bloqueando re-disparo.")
@@ -57,8 +70,8 @@ class RadiographCaptureCoordinator {
         if (!aiResult.isRadiograph) {
             currentState = CoordinatorCaptureState.SEARCHING
             val message = when {
-                quality.brightness in 1f..20f -> "Hay poca iluminación. Mejora la luz ambiental"
-                quality.brightness > 235f -> "Demasiada iluminación. Reduce la luz directa"
+                quality.brightness in 1f..14f -> "Hay poca iluminación. Mejora la luz ambiental"
+                quality.brightness > 240f -> "Demasiada iluminación. Reduce la luz directa"
                 else -> "Buscando radiografía..."
             }
             Log.d("XMEDIC_AI", "COORDINADOR: IA Negativa (Prob=${(aiResult.radiographConfidence * 100).toInt()}%). Estado: SEARCHING ($message)")
@@ -72,27 +85,21 @@ class RadiographCaptureCoordinator {
             )
         }
 
-        // Caso C: IA Positiva pero recorte extremo (pantalla pegada al borde sin objeto visible)
-        if (openCvDoc.isCutOff && openCvDoc.areaRatio > 0.96f) {
-            Log.d("XMEDIC_AI", "COORDINADOR: IA Positiva pero recorte extremo (Área > 96%). Solicitando ajustar encuadre.")
-            return CoordinatorDecision(
-                state = CoordinatorCaptureState.SEARCHING,
-                guidanceMessage = "Ajusta el encuadre",
-                shouldTriggerCapture = false,
-                isAiPositive = true,
-                aiConfidence = aiResult.radiographConfidence,
-                isFramingAcceptable = false,
-                timestamp = now
-            )
-        }
+        // Corrección 2: Comprobación flexible de encuadre combinando evidencia geométrica, iluminación y textura
+        val hasUsefulContour = openCvDoc.confidence >= 0.35f && openCvDoc.areaRatio in 0.12f..0.96f
+        val exposureAcceptable = quality.brightness in 15f..240f
+        val textureAcceptable = quality.sharpness >= 12f
 
-        // Caso A & B: IA Positiva + Encuadre Básico Aceptable
-        // (¡NO requiere 4 esquinas perfectas de OpenCV!)
-        val framingAcceptable = quality.brightness in 15f..240f
+        val framingAcceptable = exposureAcceptable && (hasUsefulContour || textureAcceptable)
 
         if (!framingAcceptable) {
-            val warningMsg = if (quality.brightness < 15f) "Hay poca iluminación. Mejora la luz ambiental" else "Demasiada iluminación"
-            Log.d("XMEDIC_AI", "COORDINADOR: IA Positiva pero encuadre inaceptable (Brillo=${quality.brightness}). Message=$warningMsg")
+            val warningMsg = when {
+                quality.brightness < 15f -> "Hay poca iluminación. Mejora la luz ambiental"
+                quality.brightness > 240f -> "Demasiada iluminación"
+                quality.hasReflections -> "Evita los reflejos sobre la imagen"
+                else -> "Ajusta el encuadre"
+            }
+            Log.d("XMEDIC_AI", "COORDINADOR: IA Positiva pero encuadre inaceptable (Brillo=${quality.brightness}, Nitidez=${quality.sharpness}). Message=$warningMsg")
             return CoordinatorDecision(
                 state = CoordinatorCaptureState.SEARCHING,
                 guidanceMessage = warningMsg,
@@ -129,18 +136,21 @@ class RadiographCaptureCoordinator {
         )
     }
 
+    @Synchronized
     fun onCaptureCompleted() {
         isCaptureInProgress = false
         currentState = CoordinatorCaptureState.CAPTURED
         Log.d("XMEDIC_AI", "COORDINADOR: Captura de imagen completada exitosamente.")
     }
 
+    @Synchronized
     fun onCaptureFailed() {
         isCaptureInProgress = false
         currentState = CoordinatorCaptureState.ERROR
         Log.e("XMEDIC_AI", "COORDINADOR: Error en la captura de imagen. Reanudando escáner.")
     }
 
+    @Synchronized
     fun reset() {
         isCaptureInProgress = false
         currentState = CoordinatorCaptureState.SEARCHING

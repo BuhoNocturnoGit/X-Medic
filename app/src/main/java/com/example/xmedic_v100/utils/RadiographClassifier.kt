@@ -22,7 +22,7 @@ data class RadiographClassificationResult(
 
 /**
  * Clasificador binario de radiografías en tiempo real con TensorFlow Lite (best.tflite).
- * Modelo: YOLO11n-cls exportado a TFLite. Entrada: 224x224 RGB.
+ * Modelo: YOLO11n-cls exportado a TFLite. Entrada: 224x224 RGB con recorte central.
  * Clases: Index 0 = no_radiografia, Index 1 = radiografia.
  */
 class RadiographClassifier(private val context: Context) {
@@ -67,7 +67,7 @@ class RadiographClassifier(private val context: Context) {
         val startTime = System.currentTimeMillis()
         return try {
             val targetSize = 224
-            val scaledBitmap = Bitmap.createScaledBitmap(bitmap, targetSize, targetSize, false)
+            val scaledBitmap = resizeCenterCrop(bitmap, targetSize)
 
             // Preprocesamiento RGB directo [1, 224, 224, 3] en Float32 (rango 0.0f .. 1.0f)
             val inputBuffer = ByteBuffer.allocateDirect(1 * targetSize * targetSize * 3 * 4)
@@ -84,6 +84,8 @@ class RadiographClassifier(private val context: Context) {
                 inputBuffer.putFloat(g / 255.0f)
                 inputBuffer.putFloat(b / 255.0f)
             }
+
+            inputBuffer.rewind()
 
             // Salida [1, 2] para clasificación binaria
             val outputBuffer = Array(1) { FloatArray(2) }
@@ -117,15 +119,56 @@ class RadiographClassifier(private val context: Context) {
     }
 
     /**
+     * Redimensiona conservando la proporción de aspecto original y aplica recorte central de 224x224.
+     * Replica exactamente el preprocesamiento predeterminado de YOLO11n-cls de Ultralytics.
+     */
+    private fun resizeCenterCrop(
+        source: Bitmap,
+        targetSize: Int = 224
+    ): Bitmap {
+        require(source.width > 0 && source.height > 0)
+
+        val scale = targetSize.toFloat() / minOf(source.width, source.height)
+
+        val newWidth = maxOf(
+            targetSize,
+            kotlin.math.round(source.width * scale).toInt()
+        )
+
+        val newHeight = maxOf(
+            targetSize,
+            kotlin.math.round(source.height * scale).toInt()
+        )
+
+        val resized = Bitmap.createScaledBitmap(
+            source,
+            newWidth,
+            newHeight,
+            true
+        )
+
+        val left = (newWidth - targetSize) / 2
+        val top = (newHeight - targetSize) / 2
+
+        return Bitmap.createBitmap(
+            resized,
+            left,
+            top,
+            targetSize,
+            targetSize
+        )
+    }
+
+    /**
      * Prueba explícita para clasificar un archivo de imagen JPG desde almacenamiento/galería
-     * con múltiples técnicas de normalización para comparar directamente con Google Colab.
+     * utilizando exactamente la misma ruta de preprocesamiento que la cámara.
      */
     fun classifyJpgFromUri(imageUri: Uri): RadiographClassificationResult {
         return try {
             val inputStream = context.contentResolver.openInputStream(imageUri)
                 ?: return RadiographClassificationResult()
             val bitmap = BitmapFactory.decodeStream(inputStream)
-            inputStream?.close()
+            inputStream.close()
 
             if (bitmap == null) {
                 Log.e("XMEDIC_AI", "PRUEBA JPG: No se pudo decodificar el bitmap desde Uri $imageUri")
@@ -135,17 +178,14 @@ class RadiographClassifier(private val context: Context) {
             Log.d("XMEDIC_AI", "=== INICIANDO PRUEBA JPG DESDE ALMACENAMIENTO ===")
             Log.d("XMEDIC_AI", "Imagen JPG origen: ${bitmap.width}x${bitmap.height} píxeles")
 
-            // Test 1: Normalización Estándar 0..1
             val resStandard = classify(bitmap)
-
-            // Test 2: Normalización ImageNet
             val resImageNet = classifyWithImageNetNorm(bitmap)
 
             Log.d("XMEDIC_AI", "RESULTADO COMPENSADO ESTÁNDAR (0..1) -> Index1(Radiografía)=${(resStandard.radiographConfidence * 100).toInt()}%")
-            Log.d("XMEDIC_AI", "RESULTADO COMPENSADO IMAGENET -> Index1(Radiografía)=${(resImageNet.radiographConfidence * 100).toInt()}%")
+            Log.d("XMEDIC_AI", "RESULTADO DIAGNÓSTICO IMAGENET -> Index1(Radiografía)=${(resImageNet.radiographConfidence * 100).toInt()}%")
             Log.d("XMEDIC_AI", "=== FIN DE PRUEBA JPG ===")
 
-            if (resImageNet.radiographConfidence > resStandard.radiographConfidence) resImageNet else resStandard
+            resStandard
         } catch (e: Exception) {
             Log.e("XMEDIC_AI", "Error en prueba JPG de almacenamiento", e)
             RadiographClassificationResult()
@@ -155,7 +195,7 @@ class RadiographClassifier(private val context: Context) {
     private fun classifyWithImageNetNorm(bitmap: Bitmap): RadiographClassificationResult {
         val interp = interpreter ?: return RadiographClassificationResult()
         val targetSize = 224
-        val scaledBitmap = Bitmap.createScaledBitmap(bitmap, targetSize, targetSize, false)
+        val scaledBitmap = resizeCenterCrop(bitmap, targetSize)
 
         val inputBuffer = ByteBuffer.allocateDirect(1 * targetSize * targetSize * 3 * 4)
         inputBuffer.order(ByteOrder.nativeOrder())
@@ -171,6 +211,8 @@ class RadiographClassifier(private val context: Context) {
             inputBuffer.putFloat(g)
             inputBuffer.putFloat(b)
         }
+
+        inputBuffer.rewind()
 
         val outputBuffer = Array(1) { FloatArray(2) }
         interp.run(inputBuffer, outputBuffer)

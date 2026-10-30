@@ -21,6 +21,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -35,6 +36,7 @@ import com.example.xmedic_v100.utils.QualityLevel
 import com.example.xmedic_v100.utils.RadiographCaptureCoordinator
 import com.example.xmedic_v100.utils.RadiographClassifier
 import java.io.File
+import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 
 @Composable
@@ -56,6 +58,11 @@ fun CameraView(
     val classifier = remember { RadiographClassifier(context) }
     val coordinator = remember { RadiographCaptureCoordinator() }
 
+    // Corrección 4: rememberUpdatedState para capturar estados y callbacks de Compose actualizados dentro del analizador
+    val autoCaptureState = rememberUpdatedState(isAutoCaptureEnabled)
+    val evaluatorCallbackState = rememberUpdatedState(onEvaluatorResult)
+    val autoCaptureCallbackState = rememberUpdatedState(onAutoCaptureRequested)
+
     var camera by remember { mutableStateOf<Camera?>(null) }
     var latestCorners by remember { mutableStateOf<List<PointF>?>(null) }
 
@@ -76,13 +83,15 @@ fun CameraView(
                         evaluator = evaluator,
                         classifier = classifier,
                         coordinator = coordinator,
-                        isAutoCaptureEnabled = isAutoCaptureEnabled,
+                        isAutoCaptureEnabled = autoCaptureState.value,
+                        mainExecutor = executor,
                         onResult = { result, shouldAutoCapture ->
                             latestCorners = result.detectedDocument.corners
-                            onEvaluatorResult(result)
+                            evaluatorCallbackState.value(result)
+
                             if (shouldAutoCapture) {
-                                Log.d("XMEDIC_AI", "CAMERAVIEW: onAutoCaptureRequested() disparado a la UI Compose.")
-                                onAutoCaptureRequested()
+                                Log.d("XMEDIC_AI", "CAMERAVIEW: Solicitud automática enviada")
+                                autoCaptureCallbackState.value()
                             }
                         }
                     )
@@ -185,6 +194,7 @@ private fun analyzeFrame(
     classifier: RadiographClassifier,
     coordinator: RadiographCaptureCoordinator,
     isAutoCaptureEnabled: Boolean,
+    mainExecutor: Executor,
     onResult: (EvaluatorResult, Boolean) -> Unit
 ) {
     try {
@@ -226,7 +236,10 @@ private fun analyzeFrame(
                 )
             }
 
-            onResult(finalEvaluatorResult, decision.shouldTriggerCapture)
+            // Entregar el resultado de forma segura en el hilo principal
+            mainExecutor.execute {
+                onResult(finalEvaluatorResult, decision.shouldTriggerCapture)
+            }
         }
     } catch (e: Exception) {
         Log.e("XMEDIC_AI", "CAMERAVIEW: Error en el hilo de análisis de tramas", e)
