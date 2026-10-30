@@ -45,11 +45,14 @@ class UserRepository(context: Context) {
             )
             db.collection("users").document(user.uid)
                 .set(userMap, SetOptions.merge())
+                .addOnSuccessListener {
+                    Log.d("XMEDIC_NAV", "Rol '${role.name}' persistido exitosamente en Firestore para UID=${user.uid}")
+                }
                 .addOnFailureListener { e ->
-                    Log.e("UserRepository", "Error al guardar el rol en Firestore", e)
+                    Log.e("XMEDIC_NAV", "Error al guardar el rol en Firestore", e)
                 }
         } catch (e: Exception) {
-            Log.e("UserRepository", "Excepción al guardar rol en Firestore", e)
+            Log.e("XMEDIC_NAV", "Excepción al guardar rol en Firestore", e)
         }
     }
 
@@ -57,16 +60,18 @@ class UserRepository(context: Context) {
      * Consulta el perfil del usuario remotamente en Firestore para recuperar su rol si ya existía.
      */
     suspend fun fetchUserProfileRemote(): UserProfileResult {
-        val user = getCurrentUser() ?: return UserProfileResult.NoRole
+        val user = getCurrentUser() ?: run {
+            Log.d("XMEDIC_NAV", "fetchUserProfileRemote: No hay usuario autenticado actualmente.")
+            return UserProfileResult.NoRole
+        }
+
         return try {
             val db = FirebaseFirestore.getInstance()
             val doc = db.collection("users").document(user.uid).get().await()
 
             if (doc.exists()) {
                 val roleName = doc.getString("role")
-                val onboardingCompleted = doc.getBoolean("onboardingCompleted") ?: false
-
-                if (!roleName.isNullOrBlank() && onboardingCompleted) {
+                if (!roleName.isNullOrBlank()) {
                     val role = try {
                         UserRole.valueOf(roleName)
                     } catch (_: Exception) {
@@ -75,18 +80,32 @@ class UserRepository(context: Context) {
                     // Guardar localmente
                     prefs.edit().putString("KEY_USER_ROLE", role.name).apply()
                     prefs.edit().putBoolean("KEY_ONBOARDING_COMPLETED", true).apply()
+                    Log.d("XMEDIC_NAV", "Perfil remoto recuperado de Firestore para UID=${user.uid}: Rol=${role.name}")
+                    UserProfileResult.HasRole(role)
+                } else {
+                    Log.d("XMEDIC_NAV", "Documento de Firestore existe para UID=${user.uid} pero no contiene 'role'.")
+                    if (hasCompletedOnboarding()) {
+                        UserProfileResult.HasRole(getUserRole())
+                    } else {
+                        UserProfileResult.NoRole
+                    }
+                }
+            } else {
+                Log.d("XMEDIC_NAV", "Documento de Firestore no existe para UID=${user.uid}.")
+                if (hasCompletedOnboarding()) {
+                    val role = getUserRole()
+                    Log.d("XMEDIC_NAV", "Usando rol local previamente guardado: ${role.name}")
                     UserProfileResult.HasRole(role)
                 } else {
                     UserProfileResult.NoRole
                 }
-            } else {
-                UserProfileResult.NoRole
             }
         } catch (e: Exception) {
-            Log.e("UserRepository", "Error al consultar perfil remoto en Firestore", e)
-            // Fallback a SharedPreferences si hay rol local previamente guardado
-            if (prefs.getBoolean("KEY_ONBOARDING_COMPLETED", false)) {
-                UserProfileResult.HasRole(getUserRole())
+            Log.e("XMEDIC_NAV", "Error de red al consultar Firestore. Verificando fallback local...", e)
+            if (hasCompletedOnboarding()) {
+                val role = getUserRole()
+                Log.d("XMEDIC_NAV", "Fallback a SharedPreferences exitoso: Rol=${role.name}")
+                UserProfileResult.HasRole(role)
             } else {
                 UserProfileResult.Error(e)
             }
@@ -140,6 +159,7 @@ class UserRepository(context: Context) {
     }
 
     fun clearLocalData() {
-        prefs.edit().clear().apply()
+        // Al cerrar sesión, no borramos SharedPreferences completas si se quiere conservar caché local
+        prefs.edit().remove("KEY_TEMP_CACHE").apply()
     }
 }

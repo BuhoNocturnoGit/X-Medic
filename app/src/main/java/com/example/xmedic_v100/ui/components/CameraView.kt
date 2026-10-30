@@ -1,5 +1,7 @@
 package com.example.xmedic_v100.ui.components
 
+import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.graphics.PointF
 import android.net.Uri
 import android.util.Log
@@ -79,6 +81,7 @@ fun CameraView(
                             latestCorners = result.detectedDocument.corners
                             onEvaluatorResult(result)
                             if (shouldAutoCapture) {
+                                Log.d("XMEDIC_AI", "CAMERAVIEW: onAutoCaptureRequested() disparado a la UI Compose.")
                                 onAutoCaptureRequested()
                             }
                         }
@@ -107,8 +110,9 @@ fun CameraView(
                     imageCapture,
                     imageAnalysis
                 )
+                Log.d("XMEDIC_AI", "CAMERAVIEW: CameraX vinculado exitosamente con casos de uso Preview, ImageCapture e ImageAnalysis.")
             } catch (e: Exception) {
-                Log.e("CameraView", "Error al inicializar la cámara", e)
+                Log.e("XMEDIC_AI", "CAMERAVIEW: Error al inicializar CameraX", e)
             }
         }, executor)
     }
@@ -119,8 +123,9 @@ fun CameraView(
         if (activeCamera != null && activeCamera.cameraInfo.hasFlashUnit()) {
             try {
                 activeCamera.cameraControl.enableTorch(isFlashOn)
+                Log.d("XMEDIC_AI", "CAMERAVIEW: Linterna física " + (if (isFlashOn) "ENCENDIDA" else "APAGADA"))
             } catch (e: Exception) {
-                Log.e("CameraView", "Error al activar antorcha/linterna", e)
+                Log.e("XMEDIC_AI", "CAMERAVIEW: Error al cambiar estado de la linterna", e)
             }
         }
     }
@@ -128,6 +133,7 @@ fun CameraView(
     // Captura de fotografía de alta resolución
     LaunchedEffect(triggerCapture) {
         if (triggerCapture) {
+            Log.d("XMEDIC_AI", "CAMERAVIEW: Ejecutando ImageCapture.takePicture() en el hardware...")
             val photoFile = File(context.cacheDir, "xray_raw_${System.currentTimeMillis()}.jpg")
             val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile).build()
 
@@ -139,13 +145,14 @@ fun CameraView(
                         coordinator.onCaptureCompleted()
                         val rawUri = Uri.fromFile(photoFile)
                         val processedUri = ImageProcessor.processAndCacheCapturedImage(context, rawUri, latestCorners) ?: rawUri
+                        Log.d("XMEDIC_AI", "CAMERAVIEW ÉXITO: Foto capturada y guardada en Uri $processedUri")
                         onImageCaptured(processedUri)
                         onCaptureHandled()
                     }
 
                     override fun onError(exception: ImageCaptureException) {
                         coordinator.onCaptureFailed()
-                        Log.e("CameraView", "Error al capturar imagen", exception)
+                        Log.e("XMEDIC_AI", "CAMERAVIEW ERROR: Fallo al capturar imagen en ImageCapture.takePicture()", exception)
                         onCaptureHandled()
                     }
                 }
@@ -162,6 +169,7 @@ fun CameraView(
             coordinator.reset()
             classifier.close()
             cameraExecutor.shutdown()
+            Log.d("XMEDIC_AI", "CAMERAVIEW: Recursos de cámara y TFLite liberados.")
         }
     }
 
@@ -180,9 +188,16 @@ private fun analyzeFrame(
     onResult: (EvaluatorResult, Boolean) -> Unit
 ) {
     try {
-        val bitmap = imageProxy.toBitmap()
-        if (bitmap != null) {
-            // 1. Inferencia TFLite con best.tflite
+        val rawBitmap = imageProxy.toBitmap()
+        if (rawBitmap != null) {
+            val rotationDegrees = imageProxy.imageInfo.rotationDegrees
+            val bitmap = if (rotationDegrees != 0) {
+                rotateBitmap(rawBitmap, rotationDegrees)
+            } else {
+                rawBitmap
+            }
+
+            // 1. Inferencia TFLite con best.tflite en la imagen rotada correctamente
             val aiResult = classifier.classify(bitmap)
 
             // 2. Evaluación geométrica y de calidad
@@ -213,9 +228,19 @@ private fun analyzeFrame(
 
             onResult(finalEvaluatorResult, decision.shouldTriggerCapture)
         }
-    } catch (_: Exception) {
-        // Manejo silencioso de análisis de frames
+    } catch (e: Exception) {
+        Log.e("XMEDIC_AI", "CAMERAVIEW: Error en el hilo de análisis de tramas", e)
     } finally {
         imageProxy.close()
+    }
+}
+
+private fun rotateBitmap(source: Bitmap, degrees: Int): Bitmap {
+    return try {
+        val matrix = Matrix().apply { postRotate(degrees.toFloat()) }
+        Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
+    } catch (e: Exception) {
+        Log.e("XMEDIC_AI", "Error al rotar bitmap de CameraX", e)
+        source
     }
 }

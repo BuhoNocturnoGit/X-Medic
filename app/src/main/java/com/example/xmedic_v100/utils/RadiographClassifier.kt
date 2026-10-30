@@ -27,7 +27,7 @@ class RadiographClassifier(context: Context) {
 
     private var interpreter: Interpreter? = null
     private var isInitialized = false
-    private var confidenceThreshold = 0.85f // Umbral de confianza configurable para clase 1 (radiografia)
+    private var confidenceThreshold = 0.65f // Umbral de confianza inicial calibrado para cámara real (Index 1 = radiografia)
 
     init {
         try {
@@ -37,9 +37,16 @@ class RadiographClassifier(context: Context) {
             }
             interpreter = Interpreter(modelBuffer, options)
             isInitialized = true
-            Log.d("XRayScanner", "Intérprete TFLite 'best.tflite' cargado exitosamente desde assets.")
+
+            val inputTensor = interpreter?.getInputTensor(0)
+            val outputTensor = interpreter?.getOutputTensor(0)
+
+            Log.d(
+                "XMEDIC_AI",
+                "MODELO TFLITE CARGADO: 'best.tflite' | InputShape=${inputTensor?.shape()?.contentToString()} (${inputTensor?.dataType()}) | OutputShape=${outputTensor?.shape()?.contentToString()} (${outputTensor?.dataType()})"
+            )
         } catch (e: Exception) {
-            Log.e("XRayScanner", "Error al cargar modelo TFLite 'best.tflite' desde assets", e)
+            Log.e("XMEDIC_AI", "ERROR CRÍTICO AL CARGAR MODELO TFLITE 'best.tflite'", e)
             isInitialized = false
         }
     }
@@ -51,6 +58,7 @@ class RadiographClassifier(context: Context) {
     fun classify(bitmap: Bitmap): RadiographClassificationResult {
         val interp = interpreter
         if (!isInitialized || interp == null) {
+            Log.w("XMEDIC_AI", "Clasificación omitida: El modelo TFLite no está inicializado.")
             return RadiographClassificationResult(timestamp = System.currentTimeMillis())
         }
 
@@ -59,7 +67,7 @@ class RadiographClassifier(context: Context) {
             val targetSize = 224
             val scaledBitmap = Bitmap.createScaledBitmap(bitmap, targetSize, targetSize, false)
 
-            // Preprocesamiento RGB directo [1, 224, 224, 3] en Float32 (rango 0.0 .. 1.0)
+            // Preprocesamiento RGB directo [1, 224, 224, 3] en Float32 (rango 0.0f .. 1.0f)
             val inputBuffer = ByteBuffer.allocateDirect(1 * targetSize * targetSize * 3 * 4)
             inputBuffer.order(ByteOrder.nativeOrder())
 
@@ -86,8 +94,8 @@ class RadiographClassifier(context: Context) {
             val isRadiograph = radProb >= confidenceThreshold
 
             Log.d(
-                "XRayScanner",
-                "TFLite Inferencia: ProbRadiografía=${(radProb * 100).toInt()}%, ProbNoRadiografía=${(nonRadProb * 100).toInt()}%, EsRadiografía=$isRadiograph, Latencia=${inferenceTime}ms"
+                "XMEDIC_AI",
+                "TFLITE INFERENCIA -> Index0(NoRadiografía): ${(nonRadProb * 100).toInt()}% | Index1(Radiografía): ${(radProb * 100).toInt()}% | Umbral: ${(confidenceThreshold * 100).toInt()}% | EsRadiografía: $isRadiograph | Latencia: ${inferenceTime}ms"
             )
 
             RadiographClassificationResult(
@@ -98,7 +106,7 @@ class RadiographClassifier(context: Context) {
                 timestamp = System.currentTimeMillis()
             )
         } catch (e: Exception) {
-            Log.e("XRayScanner", "Error durante la inferencia TFLite", e)
+            Log.e("XMEDIC_AI", "Error durante la ejecución de la inferencia TFLite", e)
             RadiographClassificationResult(timestamp = System.currentTimeMillis())
         }
     }
@@ -117,8 +125,9 @@ class RadiographClassifier(context: Context) {
             interpreter?.close()
             interpreter = null
             isInitialized = false
+            Log.d("XMEDIC_AI", "Intérprete TFLite liberado.")
         } catch (e: Exception) {
-            Log.e("XRayScanner", "Error al liberar recursos del intérprete TFLite", e)
+            Log.e("XMEDIC_AI", "Error al cerrar el intérprete TFLite", e)
         }
     }
 }

@@ -22,7 +22,7 @@ data class CoordinatorDecision(
 
 /**
  * Coordinador central que prioriza la clasificación de IA en tiempo real (TFLite)
- * sobre las reglas geométricas rígidas de OpenCV para ejecutar capturas automáticas inmediatas sin retardos artificiales.
+ * sobre las reglas geométricas rígidas de OpenCV para ejecutar capturas automáticas inmediatas sin retrasos artificiales.
  */
 class RadiographCaptureCoordinator {
 
@@ -42,6 +42,7 @@ class RadiographCaptureCoordinator {
         val now = System.currentTimeMillis()
 
         if (isCaptureInProgress) {
+            Log.d("XMEDIC_AI", "COORDINADOR: Captura en curso (isCaptureInProgress=true). Bloqueando re-disparo.")
             return CoordinatorDecision(
                 state = CoordinatorCaptureState.CAPTURING,
                 guidanceMessage = "Capturando...",
@@ -56,10 +57,11 @@ class RadiographCaptureCoordinator {
         if (!aiResult.isRadiograph) {
             currentState = CoordinatorCaptureState.SEARCHING
             val message = when {
-                quality.brightness in 1f..28f -> "Hay poca iluminación. Mejora la luz ambiental"
-                quality.brightness > 225f -> "Demasiada iluminación. Reduce la luz directa"
+                quality.brightness in 1f..20f -> "Hay poca iluminación. Mejora la luz ambiental"
+                quality.brightness > 235f -> "Demasiada iluminación. Reduce la luz directa"
                 else -> "Buscando radiografía..."
             }
+            Log.d("XMEDIC_AI", "COORDINADOR: IA Negativa (Prob=${(aiResult.radiographConfidence * 100).toInt()}%). Estado: SEARCHING ($message)")
             return CoordinatorDecision(
                 state = CoordinatorCaptureState.SEARCHING,
                 guidanceMessage = message,
@@ -70,9 +72,9 @@ class RadiographCaptureCoordinator {
             )
         }
 
-        // Caso C: IA Positiva pero recorte severo o extremo
-        if (openCvDoc.isCutOff && openCvDoc.areaRatio > 0.92f) {
-            Log.d("XRayScanner", "Coordinador: IA Positiva pero recorte severo. Solicitando ajustar encuadre.")
+        // Caso C: IA Positiva pero recorte extremo (pantalla pegada al borde sin objeto visible)
+        if (openCvDoc.isCutOff && openCvDoc.areaRatio > 0.96f) {
+            Log.d("XMEDIC_AI", "COORDINADOR: IA Positiva pero recorte extremo (Área > 96%). Solicitando ajustar encuadre.")
             return CoordinatorDecision(
                 state = CoordinatorCaptureState.SEARCHING,
                 guidanceMessage = "Ajusta el encuadre",
@@ -86,10 +88,11 @@ class RadiographCaptureCoordinator {
 
         // Caso A & B: IA Positiva + Encuadre Básico Aceptable
         // (¡NO requiere 4 esquinas perfectas de OpenCV!)
-        val framingAcceptable = quality.brightness in 25f..230f && quality.sharpness >= 10f
+        val framingAcceptable = quality.brightness in 15f..240f
 
         if (!framingAcceptable) {
-            val warningMsg = if (quality.hasReflections) "Evita los reflejos sobre la imagen" else "La imagen está desenfocada"
+            val warningMsg = if (quality.brightness < 15f) "Hay poca iluminación. Mejora la luz ambiental" else "Demasiada iluminación"
+            Log.d("XMEDIC_AI", "COORDINADOR: IA Positiva pero encuadre inaceptable (Brillo=${quality.brightness}). Message=$warningMsg")
             return CoordinatorDecision(
                 state = CoordinatorCaptureState.SEARCHING,
                 guidanceMessage = warningMsg,
@@ -101,15 +104,18 @@ class RadiographCaptureCoordinator {
             )
         }
 
-        // ÉXITO: IA Positiva + Encuadre Aceptable
-        // Disparo de captura automática INMEDIATA sin esperas artificiales de 700ms/1000ms
+        // ÉXITO: IA Positiva + Encuadre Aceptable -> Disparo Inmediato
         val shouldTrigger = isAutoCaptureEnabled && !isCaptureInProgress
         if (shouldTrigger) {
             isCaptureInProgress = true
             currentState = CoordinatorCaptureState.CAPTURING
-            Log.d("XRayScanner", "Coordinador: DISPARO AUTOMÁTICO INMEDIATO ejecutado. Prob IA=${(aiResult.radiographConfidence * 100).toInt()}%")
+            Log.d(
+                "XMEDIC_AI",
+                "COORDINADOR ÉXITO: ¡RADIOGRAFÍA ENCONTRADA! Executing takePicture() INMEDIATAMENTE. Prob IA=${(aiResult.radiographConfidence * 100).toInt()}%"
+            )
         } else {
             currentState = CoordinatorCaptureState.RADIOGRAPH_DETECTED
+            Log.d("XMEDIC_AI", "COORDINADOR: Radiografía encontrada pero autocaptura está desactivada manualmente.")
         }
 
         return CoordinatorDecision(
@@ -126,17 +132,18 @@ class RadiographCaptureCoordinator {
     fun onCaptureCompleted() {
         isCaptureInProgress = false
         currentState = CoordinatorCaptureState.CAPTURED
-        Log.d("XRayScanner", "Coordinador: Captura completada exitosamente.")
+        Log.d("XMEDIC_AI", "COORDINADOR: Captura de imagen completada exitosamente.")
     }
 
     fun onCaptureFailed() {
         isCaptureInProgress = false
         currentState = CoordinatorCaptureState.ERROR
-        Log.d("XRayScanner", "Coordinador: Error en captura. Reanudando escáner.")
+        Log.e("XMEDIC_AI", "COORDINADOR: Error en la captura de imagen. Reanudando escáner.")
     }
 
     fun reset() {
         isCaptureInProgress = false
         currentState = CoordinatorCaptureState.SEARCHING
+        Log.d("XMEDIC_AI", "COORDINADOR: Reset de estado ejecutado.")
     }
 }
