@@ -72,20 +72,28 @@ export default {
         const decodedToken = await verifyFirebaseIdToken(request.headers.get('Authorization'), projectId);
         const body = await request.json() as { operationId?: string };
 
-        if (!body.operationId || typeof body.operationId !== 'string') {
-          return jsonResponse({ success: false, error: 'El parámetro operationId es obligatorio' }, 400);
+        const operationId = body.operationId;
+        if (!operationId || typeof operationId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(operationId)) {
+          return jsonResponse({ success: false, error: 'El parámetro operationId es obligatorio y debe tener formato alfanumérico válido (máx 128 caracteres)' }, 400);
         }
 
         try {
-          const reserveResult = await firestore.reserveAnalysisTokens(decodedToken.uid, body.operationId);
+          const reserveResult = await firestore.reserveAnalysisTokens(decodedToken.uid, operationId);
           return jsonResponse({
             success: true,
-            operationId: body.operationId,
+            operationId,
             status: reserveResult.status,
             cost: reserveResult.cost,
             balance: reserveResult.balance
           });
         } catch (e: any) {
+          if (e.message && e.message.includes('FOREIGN_OPERATION_ID')) {
+            return jsonResponse({
+              success: false,
+              error: 'FOREIGN_OPERATION_ID',
+              message: 'La operación especificada pertenece a otro usuario'
+            }, 403);
+          }
           if (e.message && e.message.includes('INSUFFICIENT_TOKENS')) {
             const currentBalance = await firestore.getBalance(decodedToken.uid);
             return jsonResponse({
@@ -105,8 +113,8 @@ export default {
         const decodedToken = await verifyFirebaseIdToken(request.headers.get('Authorization'), projectId);
         const operationId = pathname.substring('/api/analysis/'.length);
 
-        if (!operationId) {
-          return jsonResponse({ error: 'operationId faltante' }, 400);
+        if (!operationId || !/^[a-zA-Z0-9_-]{1,128}$/.test(operationId)) {
+          return jsonResponse({ error: 'operationId faltante o con formato inválido' }, 400);
         }
 
         const opDoc = await firestore.getDocument(`analysis_operations/${operationId}`);
@@ -148,7 +156,7 @@ export default {
 
         const sessionId = queryParams.custom_data;
         const transactionId = queryParams.transaction_id;
-        const rewardAmount = parseInt(queryParams.reward_amount || '2', 10) || TOKEN_CONFIG.REWARDED_AD_TOKENS;
+        const rewardAmount = TOKEN_CONFIG.REWARDED_AD_TOKENS;
 
         if (!sessionId || !transactionId) {
           return jsonResponse({ error: 'Parámetros custom_data o transaction_id faltantes en callback SSV' }, 400);
