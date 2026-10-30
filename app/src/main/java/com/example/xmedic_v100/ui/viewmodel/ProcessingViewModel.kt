@@ -36,7 +36,7 @@ class ProcessingViewModel : ViewModel() {
     private val _uiState = MutableStateFlow<ProcessingUiState>(ProcessingUiState.Idle)
     val uiState: StateFlow<ProcessingUiState> = _uiState.asStateFlow()
 
-    private var tokenDeducted = false
+    private var currentOperationId: String? = null
 
     fun processImage(context: Context, imageUri: Uri) {
         if (_uiState.value !is ProcessingUiState.Idle) return
@@ -68,6 +68,7 @@ class ProcessingViewModel : ViewModel() {
                 // 3. Verificar tokens y solicitar reserva atómica de 5 tokens al backend seguro
                 _uiState.value = ProcessingUiState.CheckingTokens
                 val operationId = "op_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}"
+                currentOperationId = operationId
 
                 val reserveResult = tokenBackendRepo.reserveAnalysisTokens(operationId)
 
@@ -83,7 +84,6 @@ class ProcessingViewModel : ViewModel() {
                     }
                     is ReserveTokensResult.Success -> {
                         userRepository.saveTokenCount(reserveResult.newBalance)
-                        tokenDeducted = true
                     }
                 }
 
@@ -99,6 +99,7 @@ class ProcessingViewModel : ViewModel() {
 
                 when (inferenceResult) {
                     is InferenceResult.Success -> {
+                        tokenBackendRepo.completeAnalysisOperation(operationId, "COMPLETED")
                         val analysisResult = AnalysisResult(
                             imageUri = imageUri,
                             modelVersion = inferenceResult.modelVersion,
@@ -111,6 +112,10 @@ class ProcessingViewModel : ViewModel() {
                     }
 
                     is InferenceResult.ModelMissing -> {
+                        tokenBackendRepo.completeAnalysisOperation(operationId, "FAILED")
+                        val newBalance = tokenBackendRepo.fetchOfficialTokenBalance()
+                        if (newBalance != null) userRepository.saveTokenCount(newBalance)
+
                         _uiState.value = ProcessingUiState.ClinicalModelMissing(
                             imageUri = imageUri,
                             message = "Análisis clínico no disponible."
@@ -118,10 +123,19 @@ class ProcessingViewModel : ViewModel() {
                     }
 
                     is InferenceResult.Error -> {
+                        tokenBackendRepo.completeAnalysisOperation(operationId, "FAILED")
+                        val newBalance = tokenBackendRepo.fetchOfficialTokenBalance()
+                        if (newBalance != null) userRepository.saveTokenCount(newBalance)
+
                         _uiState.value = ProcessingUiState.Error("Error en procesamiento: ${inferenceResult.message}")
                     }
                 }
             } catch (e: Exception) {
+                currentOperationId?.let { opId ->
+                    tokenBackendRepo.completeAnalysisOperation(opId, "FAILED")
+                    val newBalance = tokenBackendRepo.fetchOfficialTokenBalance()
+                    if (newBalance != null) userRepository.saveTokenCount(newBalance)
+                }
                 _uiState.value = ProcessingUiState.Error("Excepción en procesamiento: ${e.localizedMessage}")
             } finally {
                 classifierHelper.close()
@@ -130,7 +144,7 @@ class ProcessingViewModel : ViewModel() {
     }
 
     fun resetState() {
-        tokenDeducted = false
+        currentOperationId = null
         _uiState.value = ProcessingUiState.Idle
     }
 }

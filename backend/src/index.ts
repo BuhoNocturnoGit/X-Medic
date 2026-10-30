@@ -94,6 +94,13 @@ export default {
               message: 'La operación especificada pertenece a otro usuario'
             }, 403);
           }
+          if (e.message && e.message.includes('USER_NOT_INITIALIZED')) {
+            return jsonResponse({
+              success: false,
+              error: 'USER_NOT_INITIALIZED',
+              message: 'El usuario no posee tokens inicializados en el servidor'
+            }, 400);
+          }
           if (e.message && e.message.includes('INSUFFICIENT_TOKENS')) {
             const currentBalance = await firestore.getBalance(decodedToken.uid);
             return jsonResponse({
@@ -108,7 +115,25 @@ export default {
         }
       }
 
-      // 4. Endpoint: GET /api/analysis/:operationId
+      // 4. Endpoint: POST /api/analysis/complete
+      if (pathname === '/api/analysis/complete' && request.method === 'POST') {
+        const decodedToken = await verifyFirebaseIdToken(request.headers.get('Authorization'), projectId);
+        const body = await request.json() as { operationId?: string; status?: 'COMPLETED' | 'FAILED' };
+
+        if (!body.operationId || typeof body.operationId !== 'string' || !body.status || !['COMPLETED', 'FAILED'].includes(body.status)) {
+          return jsonResponse({ success: false, error: 'Parámetros operationId y status (COMPLETED|FAILED) son obligatorios' }, 400);
+        }
+
+        const res = await firestore.completeAnalysisOperation(decodedToken.uid, body.operationId, body.status);
+        return jsonResponse({
+          success: true,
+          operationId: body.operationId,
+          status: body.status,
+          balance: res.newBalance
+        });
+      }
+
+      // 5. Endpoint: GET /api/analysis/:operationId
       if (pathname.startsWith('/api/analysis/') && request.method === 'GET') {
         const decodedToken = await verifyFirebaseIdToken(request.headers.get('Authorization'), projectId);
         const operationId = pathname.substring('/api/analysis/'.length);
@@ -129,7 +154,7 @@ export default {
         return jsonResponse(opDoc);
       }
 
-      // 5. Endpoint: POST /api/ads/session
+      // 6. Endpoint: POST /api/ads/session
       if (pathname === '/api/ads/session' && request.method === 'POST') {
         const decodedToken = await verifyFirebaseIdToken(request.headers.get('Authorization'), projectId);
         const sessionId = await firestore.createAdSession(decodedToken.uid);
@@ -140,7 +165,7 @@ export default {
         });
       }
 
-      // 6. Endpoint: GET /api/ads/ssv (Callback de AdMob SSV)
+      // 7. Endpoint: GET /api/ads/ssv (Callback de AdMob SSV)
       if (pathname === '/api/ads/ssv' && request.method === 'GET') {
         const queryParams: Record<string, string> = {};
         url.searchParams.forEach((val, key) => {

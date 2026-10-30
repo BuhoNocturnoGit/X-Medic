@@ -24,7 +24,7 @@ sealed interface ReserveTokensResult {
  */
 class TokenBackendRepository(context: Context) {
 
-    // URL oficial del Worker desplegado en Cloudflare
+    // URL oficial configurable del Worker en Cloudflare
     private val backendBaseUrl = "https://xmedic-tokens-api.workers.dev"
 
     private suspend fun getFirebaseIdToken(): String? {
@@ -146,6 +146,46 @@ class TokenBackendRepository(context: Context) {
         } catch (e: Exception) {
             Log.e("TokenBackend", "Excepción al solicitar reserva de tokens en backend", e)
             ReserveTokensResult.Error("Excepción de red: ${e.localizedMessage}")
+        }
+    }
+
+    /**
+     * Notifica la resolución de una operación de análisis (COMPLETED o FAILED)
+     */
+    suspend fun completeAnalysisOperation(operationId: String, status: String): Int? = withContext(Dispatchers.IO) {
+        val idToken = getFirebaseIdToken() ?: return@withContext null
+        return@withContext try {
+            val url = URL("$backendBaseUrl/api/analysis/complete")
+            val conn = url.openConnection() as HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.setRequestProperty("Authorization", "Bearer $idToken")
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.doOutput = true
+
+            val bodyJson = JSONObject().apply {
+                put("operationId", operationId)
+                put("status", status)
+            }
+
+            val writer = OutputStreamWriter(conn.outputStream)
+            writer.write(bodyJson.toString())
+            writer.flush()
+            writer.close()
+
+            if (conn.responseCode == 200) {
+                val reader = BufferedReader(InputStreamReader(conn.inputStream))
+                val json = JSONObject(reader.readText())
+                reader.close()
+                val balance = json.getInt("balance")
+                Log.d("TokenBackend", "Operación $operationId resuelta con estado $status. Saldo actualizado: $balance")
+                balance
+            } else {
+                Log.e("TokenBackend", "Error HTTP al completar operación: ${conn.responseCode}")
+                null
+            }
+        } catch (e: Exception) {
+            Log.e("TokenBackend", "Excepción al completar operación en backend", e)
+            null
         }
     }
 }

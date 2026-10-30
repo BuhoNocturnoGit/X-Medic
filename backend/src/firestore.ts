@@ -7,12 +7,12 @@ let cachedAccessToken: { token: string; expiry: number } | null = null;
 /**
  * Genera y renueva tokens de acceso OAuth 2.0 para la cuenta de servicio de Google en Cloudflare Workers
  */
-async function getOAuth2AccessToken(env: Env): Promise<string | null> {
+async function getOAuth2AccessToken(env: Env): Promise<string> {
   const email = env.FIREBASE_SERVICE_ACCOUNT_EMAIL;
   const privateKeyPem = env.FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY;
 
   if (!email || !privateKeyPem) {
-    return null; // Fallback para desarrollo local o entornos sin credenciales
+    throw new Error('MISSING_SERVICE_ACCOUNT_CREDENTIALS: Faltan las variables secretas FIREBASE_SERVICE_ACCOUNT_EMAIL o FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY en Cloudflare Worker.');
   }
 
   const now = Math.floor(Date.now() / 1000);
@@ -20,70 +20,65 @@ async function getOAuth2AccessToken(env: Env): Promise<string | null> {
     return cachedAccessToken.token;
   }
 
-  try {
-    const header = { alg: 'RS256', typ: 'JWT' };
-    const payload = {
-      iss: email,
-      scope: 'https://www.googleapis.com/auth/datastore',
-      aud: 'https://oauth2.googleapis.com/token',
-      exp: now + 3600,
-      iat: now
-    };
+  const header = { alg: 'RS256', typ: 'JWT' };
+  const payload = {
+    iss: email,
+    scope: 'https://www.googleapis.com/auth/datastore',
+    aud: 'https://oauth2.googleapis.com/token',
+    exp: now + 3600,
+    iat: now
+  };
 
-    const headerB64 = btoa(JSON.stringify(header)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-    const payloadB64 = btoa(JSON.stringify(payload)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-    const dataToSign = `${headerB64}.${payloadB64}`;
+  const headerB64 = btoa(JSON.stringify(header)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  const payloadB64 = btoa(JSON.stringify(payload)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  const dataToSign = `${headerB64}.${payloadB64}`;
 
-    const pemContents = privateKeyPem
-      .replace(/-----BEGIN PRIVATE KEY-----/g, '')
-      .replace(/-----END PRIVATE KEY-----/g, '')
-      .replace(/\s+/g, '');
-    const keyDer = base64UrlToUint8Array(pemContents);
+  const pemContents = privateKeyPem
+    .replace(/-----BEGIN PRIVATE KEY-----/g, '')
+    .replace(/-----END PRIVATE KEY-----/g, '')
+    .replace(/\s+/g, '');
+  const keyDer = base64UrlToUint8Array(pemContents);
 
-    const cryptoKey = await crypto.subtle.importKey(
-      'pkcs8',
-      keyDer.buffer as ArrayBuffer,
-      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-      false,
-      ['sign']
-    );
+  const cryptoKey = await crypto.subtle.importKey(
+    'pkcs8',
+    keyDer.buffer as ArrayBuffer,
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
 
-    const signature = await crypto.subtle.sign(
-      'RSASSA-PKCS1-v1_5',
-      cryptoKey,
-      new TextEncoder().encode(dataToSign)
-    );
+  const signature = await crypto.subtle.sign(
+    'RSASSA-PKCS1-v1_5',
+    cryptoKey,
+    new TextEncoder().encode(dataToSign)
+  );
 
-    const signatureB64 = btoa(String.fromCharCode(...new Uint8Array(signature)))
-      .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  const signatureB64 = btoa(String.fromCharCode(...new Uint8Array(signature)))
+    .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
 
-    const assertionJwt = `${dataToSign}.${signatureB64}`;
+  const assertionJwt = `${dataToSign}.${signatureB64}`;
 
-    const res = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-        assertion: assertionJwt
-      })
-    });
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion: assertionJwt
+    })
+  });
 
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`OAuth2 Token error (${res.status}): ${errText}`);
-    }
-
-    const tokenData = await res.json() as { access_token: string; expires_in: number };
-    cachedAccessToken = {
-      token: tokenData.access_token,
-      expiry: now + (tokenData.expires_in || 3600)
-    };
-
-    return cachedAccessToken.token;
-  } catch (e: any) {
-    console.error('Error generando OAuth2 access token de cuenta de servicio:', e);
-    return null;
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`OAuth2 Token error (${res.status}): ${errText}`);
   }
+
+  const tokenData = await res.json() as { access_token: string; expires_in: number };
+  cachedAccessToken = {
+    token: tokenData.access_token,
+    expiry: now + (tokenData.expires_in || 3600)
+  };
+
+  return cachedAccessToken.token;
 }
 
 /**
@@ -145,12 +140,11 @@ export class FirestoreClient {
   }
 
   private async getAuthHeaders(): Promise<Record<string, string>> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     const accessToken = await getOAuth2AccessToken(this.env);
-    if (accessToken) {
-      headers['Authorization'] = `Bearer ${accessToken}`;
-    }
-    return headers;
+    return {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${accessToken}`
+    };
   }
 
   /**
@@ -230,7 +224,6 @@ export class FirestoreClient {
       const now = new Date().toISOString();
       const initialTokens = TOKEN_CONFIG.INITIAL_TOKENS;
 
-      // Preservar exactamente los campos de perfil existentes si estaban presentes; NO inventar rol ni onboardingCompleted.
       const updatedProfile: Record<string, any> = {
         uid,
         tokens: initialTokens,
@@ -296,15 +289,15 @@ export class FirestoreClient {
    */
   async getBalance(uid: string): Promise<number> {
     const userDoc = await this.getDocument(`users/${uid}`);
-    if (!userDoc || userDoc.tokensInitialized !== true) {
-      const initResult = await this.initializeTokens(uid);
-      return initResult.balance;
+    if (!userDoc || userDoc.tokensInitialized !== true || typeof userDoc.tokens !== 'number') {
+      return 0; // Exige inicialización previa; NO devuelve 120 por defecto sin inicialización en Firestore.
     }
-    return typeof userDoc.tokens === 'number' ? userDoc.tokens : 0;
+    return userDoc.tokens;
   }
 
   /**
-   * Reserva y descuenta transaccionalmente 5 tokens para un análisis médico (atómico con validación de pertenencia e idempotencia)
+   * Reserva y descuenta transaccionalmente 5 tokens para un análisis médico.
+   * Exige estrictamente un usuario previamente inicializado en Firestore.
    */
   async reserveAnalysisTokens(uid: string, operationId: string): Promise<{ status: 'RESERVED' | 'ALREADY_RESERVED'; cost: number; balance: number }> {
     return this.executeWithTransactionRetry(async () => {
@@ -317,21 +310,20 @@ export class FirestoreClient {
         if (existingOp.uid !== uid) {
           throw new Error('FOREIGN_OPERATION_ID: La operación especificada pertenece a otro usuario');
         }
-        if (existingOp.status === 'RESERVED') {
+        if (existingOp.status === 'RESERVED' || existingOp.status === 'COMPLETED') {
           const currentBalance = await this.getBalance(uid);
           return { status: 'ALREADY_RESERVED', cost, balance: currentBalance };
         }
       }
 
       const userDocPath = `users/${uid}`;
-      let userDoc = await this.getDocument(userDocPath, txId);
+      const userDoc = await this.getDocument(userDocPath, txId);
 
-      if (!userDoc || userDoc.tokensInitialized !== true) {
-        await this.initializeTokens(uid);
-        userDoc = await this.getDocument(userDocPath, txId);
+      if (!userDoc || userDoc.tokensInitialized !== true || typeof userDoc.tokens !== 'number') {
+        throw new Error('USER_NOT_INITIALIZED: El usuario no posee tokens inicializados en Firestore. Debe inicializarse antes de realizar análisis.');
       }
 
-      const currentTokens = userDoc && typeof userDoc.tokens === 'number' ? userDoc.tokens : 0;
+      const currentTokens = userDoc.tokens;
 
       if (currentTokens < cost) {
         throw new Error(`INSUFFICIENT_TOKENS: Saldo actual (${currentTokens}) inferior al costo requerido (${cost})`);
@@ -400,6 +392,109 @@ export class FirestoreClient {
   }
 
   /**
+   * Resuelve de forma segura el resultado de una operación de análisis médico (COMPLETED o FAILED).
+   * En caso de FAILED verificado por el servidor, reembolsa los 5 tokens atómicamente.
+   */
+  async completeAnalysisOperation(uid: string, operationId: string, status: 'COMPLETED' | 'FAILED'): Promise<{ newBalance: number }> {
+    return this.executeWithTransactionRetry(async () => {
+      const txId = await this.beginTransaction();
+      const opPath = `analysis_operations/${operationId}`;
+      const opDoc = await this.getDocument(opPath, txId);
+
+      if (!opDoc || opDoc.uid !== uid) {
+        throw new Error('INVALID_OPERATION: La operación no existe o pertenece a otro usuario');
+      }
+
+      if (opDoc.status !== 'RESERVED') {
+        const balance = await this.getBalance(uid);
+        return { newBalance: balance };
+      }
+
+      const userDoc = await this.getDocument(`users/${uid}`, txId);
+      const currentTokens = userDoc && typeof userDoc.tokens === 'number' ? userDoc.tokens : 0;
+      const now = new Date().toISOString();
+
+      if (status === 'FAILED') {
+        const refundedTokens = currentTokens + TOKEN_CONFIG.ANALYSIS_COST;
+        const commitPayload = {
+          transaction: txId,
+          writes: [
+            {
+              update: {
+                name: `projects/${this.projectId}/databases/(default)/documents/users/${uid}`,
+                fields: toFirestoreFields({
+                  ...userDoc,
+                  tokens: refundedTokens,
+                  tokensUpdatedAt: now
+                })
+              }
+            },
+            {
+              update: {
+                name: `projects/${this.projectId}/databases/(default)/documents/analysis_operations/${operationId}`,
+                fields: toFirestoreFields({
+                  ...opDoc,
+                  status: 'FAILED_REFUNDED',
+                  resolvedAt: now
+                })
+              }
+            },
+            {
+              update: {
+                name: `projects/${this.projectId}/databases/(default)/documents/token_transactions/tx_refund_${operationId}`,
+                fields: toFirestoreFields({
+                  transactionId: `tx_refund_${operationId}`,
+                  uid,
+                  type: 'ANALYSIS_REFUND',
+                  amount: TOKEN_CONFIG.ANALYSIS_COST,
+                  operationId,
+                  timestamp: now
+                })
+              }
+            }
+          ]
+        };
+
+        const headers = await this.getAuthHeaders();
+        const res = await fetch(`${this.baseUrl}:commit`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(commitPayload)
+        });
+
+        if (!res.ok) throw new Error('Error al reembolsar tokens de análisis fallido');
+        return { newBalance: refundedTokens };
+      } else {
+        const commitPayload = {
+          transaction: txId,
+          writes: [
+            {
+              update: {
+                name: `projects/${this.projectId}/databases/(default)/documents/analysis_operations/${operationId}`,
+                fields: toFirestoreFields({
+                  ...opDoc,
+                  status: 'COMPLETED',
+                  resolvedAt: now
+                })
+              }
+            }
+          ]
+        };
+
+        const headers = await this.getAuthHeaders();
+        const res = await fetch(`${this.baseUrl}:commit`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(commitPayload)
+        });
+
+        if (!res.ok) throw new Error('Error al marcar análisis como completado');
+        return { newBalance: currentTokens };
+      }
+    });
+  }
+
+  /**
    * Registra y valida una sesión de anuncio recompensado AdMob
    */
   async createAdSession(uid: string): Promise<string> {
@@ -438,7 +533,8 @@ export class FirestoreClient {
   }
 
   /**
-   * Procesa de forma atómica e idempotente la recompensa de +2 tokens desde AdMob SSV dentro de una transacción de lectura-escritura
+   * Procesa de forma atómica e idempotente la recompensa de +2 tokens desde AdMob SSV.
+   * Exige estrictamente tokensInitialized === true.
    */
   async processAdReward(uid: string, sessionId: string, transactionId: string, rewardAmount: number = TOKEN_CONFIG.REWARDED_AD_TOKENS): Promise<{ rewardAmount: number; newBalance: number }> {
     return this.executeWithTransactionRetry(async () => {
@@ -464,7 +560,11 @@ export class FirestoreClient {
       }
 
       const userDoc = await this.getDocument(`users/${uid}`, txId);
-      const currentTokens = userDoc && typeof userDoc.tokens === 'number' ? userDoc.tokens : TOKEN_CONFIG.INITIAL_TOKENS;
+      if (!userDoc || userDoc.tokensInitialized !== true || typeof userDoc.tokens !== 'number') {
+        throw new Error('USER_NOT_INITIALIZED: El usuario debe estar inicializado previamente en Firestore para acreditar recompensas.');
+      }
+
+      const currentTokens = userDoc.tokens;
       const newTokens = currentTokens + rewardAmount;
       const now = new Date().toISOString();
 
