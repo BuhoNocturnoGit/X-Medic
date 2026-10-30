@@ -3,6 +3,7 @@ package com.example.xmedic_v100.ui.screens.camera
 import android.Manifest
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
@@ -21,7 +22,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -67,6 +67,7 @@ import com.example.xmedic_v100.ui.theme.ClinicalTextHighContrast
 import com.example.xmedic_v100.ui.theme.ClinicalTextMuted
 import com.example.xmedic_v100.utils.CaptureQualityState
 import com.example.xmedic_v100.utils.EvaluatorResult
+import kotlinx.coroutines.delay
 
 @Composable
 fun CameraScannerScreen(
@@ -84,6 +85,7 @@ fun CameraScannerScreen(
     var triggerHardwareCapture by remember { mutableStateOf(false) }
 
     var evaluatorResult by remember { mutableStateOf(EvaluatorResult()) }
+    var isAutoCaptureEnabled by remember { mutableStateOf(true) }
     var isManualOverride by remember { mutableStateOf(false) }
 
     var capturedImageUri by remember { mutableStateOf<Uri?>(null) }
@@ -108,6 +110,17 @@ fun CameraScannerScreen(
         }
     }
 
+    // Temporizador de Captura Automática al alcanzar estado READY
+    LaunchedEffect(evaluatorResult.state, isAutoCaptureEnabled, showConfirmationStep) {
+        if (evaluatorResult.state == CaptureQualityState.READY && isAutoCaptureEnabled && !triggerHardwareCapture && !showConfirmationStep) {
+            delay(800L) // Estabilidad de 800ms antes del disparo automático
+            if (evaluatorResult.state == CaptureQualityState.READY && !triggerHardwareCapture && !showConfirmationStep) {
+                Log.d("XRayScanner", "Disparo de captura automática ejecutado tras estabilización")
+                triggerHardwareCapture = true
+            }
+        }
+    }
+
     // Android Photo Picker para Galería
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -126,7 +139,7 @@ fun CameraScannerScreen(
             .background(ClinicalBgCanvas)
     ) {
         if (showConfirmationStep && capturedImageUri != null) {
-            // Paso 17: Pantalla / Vista de Confirmación de Imagen
+            // Vista de Confirmación de Imagen
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -270,7 +283,7 @@ fun CameraScannerScreen(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // 2. Alignment Guide Subtitle Pill
+                // 2. Subtitle Guidance Pill
                 Box(
                     modifier = Modifier
                         .testTag("pill_alignment_guide")
@@ -283,14 +296,10 @@ fun CameraScannerScreen(
                         text = evaluatorResult.guidanceMessage,
                         color = when (evaluatorResult.state) {
                             CaptureQualityState.READY -> ClinicalPrimary
+                            CaptureQualityState.STABILIZING,
                             CaptureQualityState.VERIFYING,
                             CaptureQualityState.TOO_CLOSE,
                             CaptureQualityState.TOO_FAR,
-                            CaptureQualityState.MISALIGNED_LEFT,
-                            CaptureQualityState.MISALIGNED_RIGHT,
-                            CaptureQualityState.MISALIGNED_TOP,
-                            CaptureQualityState.MISALIGNED_BOTTOM,
-                            CaptureQualityState.TILTED,
                             CaptureQualityState.GLARE_DETECTED,
                             CaptureQualityState.BLUR_DETECTED,
                             CaptureQualityState.UNSTABLE -> Color(0xFFF59E0B)
@@ -436,7 +445,7 @@ fun CameraScannerScreen(
                         )
                     }
 
-                    // Botón Shutter (Se habilita ÚNICAMENTE cuando isShutterEnabled es true)
+                    // Botón Shutter (Se habilita cuando isShutterEnabled es true)
                     val shutterScale by animateFloatAsState(
                         targetValue = if (isScanning) 0.92f else 1f,
                         label = "shutterScale"
@@ -519,19 +528,35 @@ fun CameraScannerScreen(
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                // Toggle para Modo Manual Override (Recuperación)
+                // Toggles para Captura Automática y Modo Manual
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .clickable { isManualOverride = !isManualOverride }
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = if (isManualOverride) "Modo manual activado" else "Forzar captura manual",
+                        text = if (isAutoCaptureEnabled) "Auto-captura: ON" else "Auto-captura: OFF",
+                        color = if (isAutoCaptureEnabled) ClinicalPrimary else ClinicalTextMuted,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(ClinicalSurfaceElevated)
+                            .border(1.dp, if (isAutoCaptureEnabled) ClinicalPrimary else ClinicalBorderStrong, RoundedCornerShape(12.dp))
+                            .clickable { isAutoCaptureEnabled = !isAutoCaptureEnabled }
+                            .padding(horizontal = 10.dp, vertical = 5.dp)
+                    )
+
+                    Text(
+                        text = if (isManualOverride) "Modo manual" else "Captura asistida",
                         color = if (isManualOverride) ClinicalPrimary else ClinicalTextMuted,
                         fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(ClinicalSurfaceElevated)
+                            .border(1.dp, if (isManualOverride) ClinicalPrimary else ClinicalBorderStrong, RoundedCornerShape(12.dp))
+                            .clickable { isManualOverride = !isManualOverride }
+                            .padding(horizontal = 10.dp, vertical = 5.dp)
                     )
                 }
 

@@ -7,8 +7,8 @@ import kotlin.math.abs
 import kotlin.math.atan2
 
 /**
- * Detector de contornos y geometría de radiografías/documentos.
- * Analiza gradientes de bordes, aislando placas radiográficas verdaderas respecto a fondos planos o paredes.
+ * Detector adaptativo de contornos y geometría de radiografías/documentos.
+ * Implementa seguimiento temporal entre fotogramas para prevenir parpadeos o saltos del marco dinámico.
  */
 class OpenCVDocumentDetector : IXRayDocumentDetector {
 
@@ -49,17 +49,13 @@ class OpenCVDocumentDetector : IXRayDocumentDetector {
         }
 
         val contrastRange = maxIntensity - minIntensity
-        if (contrastRange < 30) {
+        if (contrastRange < 28) {
             framesWithoutDetection++
-            if (framesWithoutDetection > 4) {
-                smoothedCorners = null
-            }
-            Log.d("XRayScanner", "Detección rechazada: Escena con contraste uniforme o plano ($contrastRange < 30)")
-            return DetectedDocument(confidence = 0.0f, isQuadrilateral = false)
+            return handleMissingDetection("Escena con contraste uniforme ($contrastRange < 28)")
         }
 
         // Detección de gradientes / bordes locales (Simulación Canny/Sobel)
-        val edgeThreshold = (minIntensity + contrastRange * 0.45f).toInt()
+        val edgeThreshold = (minIntensity + contrastRange * 0.40f).toInt()
         var minX = targetWidth
         var maxX = -1
         var minY = targetHeight
@@ -76,7 +72,7 @@ class OpenCVDocumentDetector : IXRayDocumentDetector {
                 val gy = abs(gray[idx + targetWidth] - gray[idx - targetWidth])
                 val gradient = gx + gy
 
-                if (gradient > 28 && current >= edgeThreshold) {
+                if (gradient > 24 && current >= edgeThreshold) {
                     activePixels++
                     if (x < minX) minX = x
                     if (x > maxX) maxX = x
@@ -89,16 +85,11 @@ class OpenCVDocumentDetector : IXRayDocumentDetector {
         val totalPixels = targetWidth * targetHeight
         val occupation = activePixels.toFloat() / totalPixels
 
-        // Si no hay suficientes píxeles de borde con estructura o el rectángulo abarca el 100% de la pantalla sin bordes reales
         val isFullCanvasBorder = minX <= 1 && maxX >= targetWidth - 2 && minY <= 1 && maxY >= targetHeight - 2
 
-        if (activePixels < 40 || occupation < 0.05f || (isFullCanvasBorder && contrastRange < 80)) {
+        if (activePixels < 35 || occupation < 0.04f || (isFullCanvasBorder && contrastRange < 75)) {
             framesWithoutDetection++
-            if (framesWithoutDetection > 4) {
-                smoothedCorners = null
-            }
-            Log.d("XRayScanner", "Detección rechazada: No hay contorno definido de radiografía (Píxeles borde=$activePixels, Ocupación=${(occupation * 100).toInt()}%)")
-            return DetectedDocument(confidence = 0.0f, isQuadrilateral = false)
+            return handleMissingDetection("Sin contorno definido (Píxeles=$activePixels, Ocupación=${(occupation * 100).toInt()}%)")
         }
 
         // Normalización de coordenadas a rango [0.0f .. 1.0f]
@@ -165,5 +156,26 @@ class OpenCVDocumentDetector : IXRayDocumentDetector {
             isCutOff = isCutOff,
             confidence = confidence
         )
+    }
+
+    /**
+     * Retención del seguimiento temporal: si la detección falla momentáneamente (1 a 3 fotogramas),
+     * mantiene el marco previo con confianza degradada suavemente antes de borrarlo.
+     */
+    private fun handleMissingDetection(reason: String): DetectedDocument {
+        Log.d("XRayScanner", "Detección no observada ($framesWithoutDetection fotogramas): $reason")
+        val currentCorners = smoothedCorners
+        return if (currentCorners != null && currentCorners.size == 4 && framesWithoutDetection <= 3) {
+            val degradedConfidence = (0.75f - (framesWithoutDetection * 0.15f)).coerceAtLeast(0.35f)
+            DetectedDocument(
+                corners = currentCorners,
+                areaRatio = 0.35f,
+                isQuadrilateral = true,
+                confidence = degradedConfidence
+            )
+        } else {
+            smoothedCorners = null
+            DetectedDocument(confidence = 0.0f, isQuadrilateral = false)
+        }
     }
 }

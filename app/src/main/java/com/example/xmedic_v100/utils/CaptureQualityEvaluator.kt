@@ -4,23 +4,24 @@ import android.graphics.Bitmap
 import android.util.Log
 
 enum class CaptureQualityState {
+    SEARCHING,
+    ADJUSTING,
+    STABILIZING,
+    READY,
+    CAPTURING,
+    CAPTURED,
+    ERROR,
+    // Valores de compatibilidad
     SEARCHING_DOCUMENT,
-    DOCUMENT_NOT_FOUND,
     OUT_OF_FRAME,
     TOO_CLOSE,
     TOO_FAR,
-    MISALIGNED_LEFT,
-    MISALIGNED_RIGHT,
-    MISALIGNED_TOP,
-    MISALIGNED_BOTTOM,
-    TILTED,
     TOO_DARK,
     OVEREXPOSED,
     GLARE_DETECTED,
     BLUR_DETECTED,
     UNSTABLE,
-    VERIFYING,
-    READY
+    VERIFYING
 }
 
 enum class QualityLevel {
@@ -104,7 +105,7 @@ class CaptureQualityEvaluator(
                 state = CaptureQualityState.OUT_OF_FRAME,
                 level = QualityLevel.REJECTED,
                 globalScore = 40f,
-                guidanceMessage = "Aleja un poco la cámara para mostrar todos los bordes",
+                guidanceMessage = "Aleja la cámara para mostrar más contenido",
                 isShutterEnabled = false,
                 detectedDocument = doc,
                 frameQualityState = FrameQualityState.Insufficient
@@ -138,16 +139,16 @@ class CaptureQualityEvaluator(
         if (level == QualityLevel.REJECTED) {
             consecutiveValidFrames = 0
             val rejectedMessage = when {
-                qualityAnalysis.hasReflections -> "Evita los reflejos sobre la imagen"
-                qualityAnalysis.sharpness < 12f -> "La imagen está borrosa. Enfoca la radiografía"
-                isMoving -> "Mantén la cámara estable"
-                doc.areaRatio > ScannerConfig.MAX_AREA_RATIO -> "Aleja un poco la cámara"
-                doc.areaRatio < ScannerConfig.MIN_AREA_RATIO -> "Acerca un poco la cámara"
+                qualityAnalysis.hasReflections -> "Demasiada luz. Evita los reflejos"
+                qualityAnalysis.sharpness < 12f -> "La imagen está desenfocada"
+                isMoving -> "Mantén el celular estable"
+                doc.areaRatio > ScannerConfig.MAX_AREA_RATIO -> "Aleja la cámara para mostrar más contenido"
+                doc.areaRatio < ScannerConfig.MIN_AREA_RATIO -> "Acerca la cámara un poco"
                 else -> "Ajusta la posición de la radiografía"
             }
             Log.d("XRayScanner", "Evaluación REJECTED: GlobalScore=$globalScore, Geo=$geometryScore, Illum=$illuminationScore, Sharp=$sharpnessScore")
             return EvaluatorResult(
-                state = CaptureQualityState.VERIFYING,
+                state = CaptureQualityState.ADJUSTING,
                 level = QualityLevel.REJECTED,
                 globalScore = globalScore,
                 guidanceMessage = rejectedMessage,
@@ -163,15 +164,15 @@ class CaptureQualityEvaluator(
         val isReady = consecutiveValidFrames >= ScannerConfig.REQUIRED_STABLE_FRAMES
 
         val finalMessage = when {
-            !isReady -> "Verificando los bordes de la radiografía..."
-            level == QualityLevel.EXCELLENT -> "Excelente encuadre. Lista para capturar"
-            else -> "Imagen aceptable. Puedes capturar"
+            !isReady -> "Radiografía detectada. Mantén la posición"
+            level == QualityLevel.EXCELLENT -> "Imagen lista para capturar"
+            else -> "Imagen lista para capturar"
         }
 
         Log.d("XRayScanner", "Evaluación ÉXITO: Level=$level, GlobalScore=$globalScore, ShutterEnabled=$isReady, Fotogramas=$consecutiveValidFrames")
 
         return EvaluatorResult(
-            state = if (isReady) CaptureQualityState.READY else CaptureQualityState.VERIFYING,
+            state = if (isReady) CaptureQualityState.READY else CaptureQualityState.STABILIZING,
             level = level,
             globalScore = globalScore,
             guidanceMessage = finalMessage,
