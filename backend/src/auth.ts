@@ -1,20 +1,33 @@
 import { DecodedToken } from './types';
 
-let cachedPublicKeys: Record<string, string> | null = null;
-let keysCacheExpiry = 0;
+interface JwkKey {
+  kty: string;
+  alg: string;
+  use: string;
+  kid: string;
+  n: string;
+  e: string;
+}
+
+interface JwksResponse {
+  keys: JwkKey[];
+}
+
+let cachedJwksKeys: Record<string, JwkKey> | null = null;
+let jwksCacheExpiry = 0;
 
 /**
- * Obtiene y almacena en caché las claves públicas de Firebase Auth desde Google.
+ * Obtiene y almacena en caché las claves públicas JWK de Firebase Auth desde Google.
  */
-async function getFirebasePublicKeys(): Promise<Record<string, string>> {
+async function getFirebaseJwksKeys(): Promise<Record<string, JwkKey>> {
   const now = Date.now();
-  if (cachedPublicKeys && now < keysCacheExpiry) {
-    return cachedPublicKeys;
+  if (cachedJwksKeys && now < jwksCacheExpiry) {
+    return cachedJwksKeys;
   }
 
-  const res = await fetch('https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com');
+  const res = await fetch('https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com');
   if (!res.ok) {
-    throw new Error(`Error obteniendo claves públicas de Google: ${res.statusText}`);
+    throw new Error(`Error obteniendo claves JWK de Google: ${res.statusText}`);
   }
 
   const cacheControl = res.headers.get('cache-control');
@@ -26,15 +39,26 @@ async function getFirebasePublicKeys(): Promise<Record<string, string>> {
     }
   }
 
-  cachedPublicKeys = await res.json();
-  keysCacheExpiry = now + maxAgeSeconds * 1000;
-  return cachedPublicKeys!;
+  const data = await res.json() as JwksResponse;
+  const keysMap: Record<string, JwkKey> = {};
+
+  if (Array.isArray(data.keys)) {
+    for (const key of data.keys) {
+      if (key.kid) {
+        keysMap[key.kid] = key;
+      }
+    }
+  }
+
+  cachedJwksKeys = keysMap;
+  jwksCacheExpiry = now + maxAgeSeconds * 1000;
+  return cachedJwksKeys;
 }
 
 /**
  * Decodifica Base64URL a Uint8Array
  */
-function base64UrlToUint8Array(base64Url: string): Uint8Array {
+export function base64UrlToUint8Array(base64Url: string): Uint8Array {
   const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
   const padLen = (4 - (base64.length % 4)) % 4;
   const padded = base64 + '='.repeat(padLen);
@@ -47,20 +71,12 @@ function base64UrlToUint8Array(base64Url: string): Uint8Array {
 }
 
 /**
- * Convierte un certificado X.509 PEM a CryptoKey de Web Crypto API
+ * Importa una clave JWK RSA usando Web Crypto API de Cloudflare Workers
  */
-async function pemToCryptoKey(pem: string): Promise<CryptoKey> {
-  const pemContents = pem
-    .replace(/-----BEGIN CERTIFICATE-----/, '')
-    .replace(/-----END CERTIFICATE-----/, '')
-    .replace(/\s+/g, '');
-
-  const der = base64UrlToUint8Array(pemContents);
-
-  // Importa la clave utilizando el algoritmo RSASSA-PKCS1-v1_5 / SHA-256
+async function importJwkToCryptoKey(jwk: JwkKey): Promise<CryptoKey> {
   return await crypto.subtle.importKey(
-    'spki',
-    await extractPublicKeyFromCert(der),
+    'jwk',
+    jwk,
     {
       name: 'RSASSA-PKCS1-v1_5',
       hash: 'SHA-256'
@@ -68,19 +84,6 @@ async function pemToCryptoKey(pem: string): Promise<CryptoKey> {
     false,
     ['verify']
   );
-}
-
-/**
- * Extrae la SubjectPublicKeyInfo DER desde un certificado DER X.509
- */
-async function extractPublicKeyFromCert(certDer: Uint8Array): Promise<ArrayBuffer> {
-  // En Web Crypto API moderna, podemos importar directamente la clave DER o la clave X509
-  // Usamos el parser de certificado o la carga directa
-  try {
-    return certDer.buffer as ArrayBuffer;
-  } catch {
-    return certDer.buffer as ArrayBuffer;
-  }
 }
 
 /**
@@ -114,8 +117,9 @@ export async function verifyFirebaseIdToken(
     throw new Error('El encabezado del JWT no contiene la propiedad kid');
   }
 
-  // 1. Verificar afirmaciones (Claims)
+  // 1. Verificar afirmaciones temporales obligatorias (Claims)
   const nowInSec = Math.floor(Date.now() / 1000);
+  const clockSkewTolerance = 300; // 5 minutos de tolerancia para diferencias de reloj
 
   if (payload.aud !== projectId) {
     throw new Error(`Audience inválido: ${payload.aud}. Se esperaba: ${projectId}`);
@@ -130,21 +134,29 @@ export async function verifyFirebaseIdToken(
     throw new Error('El ID Token de Firebase ha expirado');
   }
 
+  if (payload.iat && payload.iat > nowInSec + clockSkewTolerance) {
+    throw new Error('El claim iat del ID Token se encuentra en el futuro');
+  }
+
+  if (payload.auth_time && payload.auth_time > nowInSec + clockSkewTolerance) {
+    throw new Error('El claim auth_time del ID Token se encuentra en el futuro');
+  }
+
   if (!payload.sub || typeof payload.sub !== 'string') {
     throw new Error('El Subject (sub/UID) del ID Token es inválido o está vacío');
   }
 
-  // 2. Verificar firma criptográfica RS256 con la clave pública del kid
-  const keys = await getFirebasePublicKeys();
-  const pem = keys[kid];
-  if (!pem) {
-    throw new Error(`No se encontró clave pública para el kid: ${kid}`);
+  // 2. Verificar firma criptográfica RS256 usando la clave JWK correspondiente al kid
+  const jwksMap = await getFirebaseJwksKeys();
+  const jwk = jwksMap[kid];
+  if (!jwk) {
+    throw new Error(`No se encontró clave pública JWK para el kid: ${kid}`);
   }
 
   const signatureBytes = base64UrlToUint8Array(signatureB64);
   const dataBytes = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
 
-  const cryptoKey = await pemToCryptoKey(pem);
+  const cryptoKey = await importJwkToCryptoKey(jwk);
   const isValid = await crypto.subtle.verify(
     'RSASSA-PKCS1-v1_5',
     cryptoKey,

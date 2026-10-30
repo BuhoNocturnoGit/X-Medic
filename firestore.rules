@@ -2,43 +2,44 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Reglas para la colección de usuarios
+    // Colección de usuarios
     match /users/{userId} {
       // El usuario autenticado puede leer su propio perfil
       allow read: if request.auth != null && request.auth.uid == userId;
 
-      // El usuario puede crear o actualizar su perfil básico (displayName, email, role, onboardingCompleted)
-      // PERO NO PUEDE MODIFICAR el campo 'tokens' ni 'tokensInitialized' desde el cliente Android.
-      allow create, update: if request.auth != null
-                            && request.auth.uid == userId
-                            && (!request.resource.data.keys().hasAny(['tokens', 'tokensInitialized'])
-                                || request.resource.data.tokens == resource.data.tokens);
+      // Permitir crear el perfil inicial si no contiene campos económicos administrados por el backend
+      allow create: if request.auth != null
+                    && request.auth.uid == userId
+                    && !request.resource.data.keys().hasAny(['tokens', 'tokensInitialized', 'tokensInitializedAt', 'tokensUpdatedAt']);
 
-      allow delete: if false; // Los perfiles no se borran desde el cliente.
+      // Permitir actualizar campos del perfil (displayName, email, role, onboardingCompleted)
+      // PERO BLOQUEAR TOTALMENTE cualquier modificación sobre los campos económicos desde el cliente Android.
+      allow update: if request.auth != null
+                    && request.auth.uid == userId
+                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['tokens', 'tokensInitialized', 'tokensInitializedAt', 'tokensUpdatedAt']);
+
+      allow delete: if false; // Los perfiles de usuario no se eliminan desde el cliente Android.
     }
 
-    // Reglas para transacciones de tokens (administradas exclusivamente por el Backend Worker)
-    match /token_transactions/{transactionId} {
+    // Colecciones de auditoría y transacciones (Sólo accesibles por el Backend Worker)
+    match /token_transactions/{txId} {
       allow read: if request.auth != null && resource.data.uid == request.auth.uid;
-      allow write: if false; // Solo el backend Cloudflare Worker puede escribir transacciones.
+      allow write: if false;
     }
 
-    // Reglas para operaciones de análisis médico
-    match /analysis_operations/{operationId} {
+    match /analysis_operations/{opId} {
       allow read: if request.auth != null && resource.data.uid == request.auth.uid;
-      allow write: if false; // Solo el backend Cloudflare Worker autoriza y descuenta los 5 tokens.
+      allow write: if false;
     }
 
-    // Reglas para recompensas AdMob SSV
     match /ad_rewards/{rewardId} {
       allow read: if request.auth != null && resource.data.uid == request.auth.uid;
-      allow write: if false; // Solo el backend Cloudflare Worker acredita recompensas SSV.
+      allow write: if false;
     }
 
-    // Reglas para sesiones de anuncios AdMob
-    match /ad_sessions/{sessionId} {
+    match /ad_sessions/{sessId} {
       allow read: if request.auth != null && resource.data.uid == request.auth.uid;
-      allow write: if false; // Creadas exclusivamente por el backend Worker.
+      allow write: if false;
     }
   }
 }

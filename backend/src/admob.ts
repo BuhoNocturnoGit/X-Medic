@@ -1,4 +1,5 @@
-import { AdMobSsvQueryParams } from './types';
+import { AdMobSsvQueryParams, Env } from './types';
+import { base64UrlToUint8Array } from './auth';
 
 let cachedAdMobKeys: Record<number, string> | null = null;
 let admobKeysCacheExpiry = 0;
@@ -34,29 +35,40 @@ async function getAdMobPublicKeys(): Promise<Record<number, string>> {
 }
 
 /**
- * Decodifica Base64URL
+ * Extrae la subcadena sin alterar la representación original de bytes y orden enviada por Google AdMob
  */
-function base64UrlToUint8Array(base64Url: string): Uint8Array {
-  const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-  const padLen = (4 - (base64.length % 4)) % 4;
-  const padded = base64 + '='.repeat(padLen);
-  const binary = atob(padded);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
+function extractOriginalSignedQueryString(rawQueryString: string): string {
+  // Omitir signature y key_id preservando exactamente el orden y codificación original enviada por Google
+  return rawQueryString
+    .replace(/&signature=[^&]*/, '')
+    .replace(/signature=[^&]*&?/, '')
+    .replace(/&key_id=[^&]*/, '')
+    .replace(/key_id=[^&]*&?/, '')
+    .replace(/&$/, '')
+    .replace(/^&/, '');
 }
 
 /**
  * Verifica la firma ECDSA del callback Server-Side Verification (SSV) de Google AdMob
  */
-export async function verifyAdMobSsvSignature(params: AdMobSsvQueryParams, rawQueryString: string): Promise<boolean> {
+export async function verifyAdMobSsvSignature(
+  params: AdMobSsvQueryParams,
+  rawQueryString: string,
+  env: Env
+): Promise<boolean> {
   const keyIdStr = params.key_id;
   const signatureStr = params.signature;
 
   if (!keyIdStr || !signatureStr) {
     return false;
+  }
+
+  // Validar ad_unit configurado
+  if (params.ad_unit && env.ADMOB_REWARDED_AD_UNIT_ID && params.ad_unit !== env.ADMOB_REWARDED_AD_UNIT_ID) {
+    // Si no coincide con el bloque de anuncios configurado, rechazar
+    if (!env.ADMOB_REWARDED_AD_UNIT_ID.includes('3940256099942544')) {
+      return false;
+    }
   }
 
   const keyId = parseInt(keyIdStr, 10);
@@ -67,19 +79,8 @@ export async function verifyAdMobSsvSignature(params: AdMobSsvQueryParams, rawQu
     return false;
   }
 
-  // Reconstruir la cadena firmada omitiendo signature y key_id según la especificación de Google AdMob SSV
-  const urlParams = new URLSearchParams(rawQueryString);
-  urlParams.delete('signature');
-  urlParams.delete('key_id');
-
-  // Ordenar alfabéticamente los parámetros restantes
-  const sortedKeys = Array.from(urlParams.keys()).sort();
-  const messageParts: string[] = [];
-  for (const k of sortedKeys) {
-    messageParts.push(`${k}=${urlParams.get(k)}`);
-  }
-  const messageToVerify = messageParts.join('&');
-  const messageBytes = new TextEncoder().encode(messageToVerify);
+  const signedQueryString = extractOriginalSignedQueryString(rawQueryString);
+  const messageBytes = new TextEncoder().encode(signedQueryString);
   const signatureBytes = base64UrlToUint8Array(signatureStr);
 
   try {

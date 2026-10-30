@@ -13,3 +13,11 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Backend Cloudflare Workers & Secrets
+backend/dist/
+backend/node_modules/
+backend/.dev.vars
+backend/.env
+backend/.env.local
+backend/*.log

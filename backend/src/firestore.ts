@@ -1,5 +1,90 @@
 import { Env, UserTokenProfile } from './types';
 import { TOKEN_CONFIG } from './config';
+import { base64UrlToUint8Array } from './auth';
+
+let cachedAccessToken: { token: string; expiry: number } | null = null;
+
+/**
+ * Genera y renueva tokens de acceso OAuth 2.0 para la cuenta de servicio de Google en Cloudflare Workers
+ */
+async function getOAuth2AccessToken(env: Env): Promise<string | null> {
+  const email = env.FIREBASE_SERVICE_ACCOUNT_EMAIL;
+  const privateKeyPem = env.FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY;
+
+  if (!email || !privateKeyPem) {
+    return null; // Fallback para desarrollo local o sin credenciales de cuenta de servicio
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  if (cachedAccessToken && now < cachedAccessToken.expiry - 60) {
+    return cachedAccessToken.token;
+  }
+
+  try {
+    const header = { alg: 'RS256', typ: 'JWT' };
+    const payload = {
+      iss: email,
+      scope: 'https://www.googleapis.com/auth/datastore',
+      aud: 'https://oauth2.googleapis.com/token',
+      exp: now + 3600,
+      iat: now
+    };
+
+    const headerB64 = btoa(JSON.stringify(header)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+    const payloadB64 = btoa(JSON.stringify(payload)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+    const dataToSign = `${headerB64}.${payloadB64}`;
+
+    const pemContents = privateKeyPem
+      .replace(/-----BEGIN PRIVATE KEY-----/g, '')
+      .replace(/-----END PRIVATE KEY-----/g, '')
+      .replace(/\s+/g, '');
+    const keyDer = base64UrlToUint8Array(pemContents);
+
+    const cryptoKey = await crypto.subtle.importKey(
+      'pkcs8',
+      keyDer.buffer as ArrayBuffer,
+      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+      false,
+      ['sign']
+    );
+
+    const signature = await crypto.subtle.sign(
+      'RSASSA-PKCS1-v1_5',
+      cryptoKey,
+      new TextEncoder().encode(dataToSign)
+    );
+
+    const signatureB64 = btoa(String.fromCharCode(...new Uint8Array(signature)))
+      .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+
+    const assertionJwt = `${dataToSign}.${signatureB64}`;
+
+    const res = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+        assertion: assertionJwt
+      })
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`OAuth2 Token error (${res.status}): ${errText}`);
+    }
+
+    const tokenData = await res.json() as { access_token: string; expires_in: number };
+    cachedAccessToken = {
+      token: tokenData.access_token,
+      expiry: now + (tokenData.expires_in || 3600)
+    };
+
+    return cachedAccessToken.token;
+  } catch (e: any) {
+    console.error('Error generando OAuth2 access token de cuenta de servicio:', e);
+    return null;
+  }
+}
 
 /**
  * Convierte un objeto JavaScript simple a formato Value Document de Firestore REST API.
@@ -46,23 +131,55 @@ function fromFirestoreFields(fields: Record<string, any> = {}): Record<string, a
 }
 
 /**
- * Cliente REST de Cloud Firestore optimizado para Cloudflare Workers
+ * Cliente REST de Cloud Firestore con transacciones atómicas de lectura-escritura y OAuth 2.0
  */
 export class FirestoreClient {
   private projectId: string;
   private baseUrl: string;
+  private env: Env;
 
   constructor(env: Env) {
+    this.env = env;
     this.projectId = env.FIREBASE_PROJECT_ID || 'x-medic';
     this.baseUrl = `https://firestore.googleapis.com/v1/projects/${this.projectId}/databases/(default)/documents`;
   }
 
+  private async getAuthHeaders(): Promise<Record<string, string>> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const accessToken = await getOAuth2AccessToken(this.env);
+    if (accessToken) {
+      headers['Authorization'] = `Bearer ${accessToken}`;
+    }
+    return headers;
+  }
+
   /**
-   * Obtiene un documento de Firestore por su ruta
+   * Inicia una transacción atómica de lectura-escritura en Firestore
    */
-  async getDocument(path: string): Promise<Record<string, any> | null> {
-    const url = `${this.baseUrl}/${path}`;
-    const res = await fetch(url);
+  async beginTransaction(): Promise<string> {
+    const headers = await this.getAuthHeaders();
+    const url = `${this.baseUrl}:beginTransaction`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ options: { readWrite: {} } })
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Firestore beginTransaction error (${res.status}): ${err}`);
+    }
+    const data = await res.json() as { transaction: string };
+    return data.transaction;
+  }
+
+  /**
+   * Obtiene un documento de Firestore
+   */
+  async getDocument(path: string, transactionId?: string): Promise<Record<string, any> | null> {
+    const headers = await this.getAuthHeaders();
+    const query = transactionId ? `?transaction=${encodeURIComponent(transactionId)}` : '';
+    const url = `${this.baseUrl}/${path}${query}`;
+    const res = await fetch(url, { headers });
     if (res.status === 404) {
       return null;
     }
@@ -75,11 +192,12 @@ export class FirestoreClient {
   }
 
   /**
-   * Inicializa de forma idempotente y atómica el bono de 120 tokens para un UID
+   * Inicializa de forma atómica e idempotente el bono de 120 tokens para un UID dentro de una transacción
    */
   async initializeTokens(uid: string, initialProfile?: Partial<UserTokenProfile>): Promise<{ initialized: boolean; balance: number }> {
+    const txId = await this.beginTransaction();
     const userDocPath = `users/${uid}`;
-    const existing = await this.getDocument(userDocPath);
+    const existing = await this.getDocument(userDocPath, txId);
 
     if (existing && existing.tokensInitialized === true && typeof existing.tokens === 'number') {
       return { initialized: false, balance: existing.tokens };
@@ -100,10 +218,9 @@ export class FirestoreClient {
       tokensUpdatedAt: now
     };
 
-    const commitUrl = `https://firestore.googleapis.com/v1/projects/${this.projectId}/databases/(default)/documents:commit`;
-    const txId = `tx_init_${uid}_${Date.now()}`;
-
+    const transactionRecordId = `tx_init_${uid}_${Date.now()}`;
     const commitPayload = {
+      transaction: txId,
       writes: [
         {
           update: {
@@ -113,9 +230,9 @@ export class FirestoreClient {
         },
         {
           update: {
-            name: `projects/${this.projectId}/databases/(default)/documents/token_transactions/${txId}`,
+            name: `projects/${this.projectId}/databases/(default)/documents/token_transactions/${transactionRecordId}`,
             fields: toFirestoreFields({
-              transactionId: txId,
+              transactionId: transactionRecordId,
               uid,
               type: 'INITIAL_BONUS',
               amount: initialTokens,
@@ -126,9 +243,11 @@ export class FirestoreClient {
       ]
     };
 
+    const headers = await this.getAuthHeaders();
+    const commitUrl = `https://firestore.googleapis.com/v1/projects/${this.projectId}/databases/(default)/documents:commit`;
     const res = await fetch(commitUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(commitPayload)
     });
 
@@ -153,12 +272,13 @@ export class FirestoreClient {
   }
 
   /**
-   * Reserva y descuenta transaccionalmente 5 tokens para un análisis médico (idempotente por operationId)
+   * Reserva y descuenta transaccionalmente 5 tokens para un análisis médico dentro de una transacción atómica de lectura-escritura
    */
   async reserveAnalysisTokens(uid: string, operationId: string): Promise<{ status: 'RESERVED' | 'ALREADY_RESERVED'; cost: number; balance: number }> {
+    const txId = await this.beginTransaction();
     const cost = TOKEN_CONFIG.ANALYSIS_COST;
     const opPath = `analysis_operations/${operationId}`;
-    const existingOp = await this.getDocument(opPath);
+    const existingOp = await this.getDocument(opPath, txId);
 
     if (existingOp && existingOp.status === 'RESERVED') {
       const currentBalance = await this.getBalance(uid);
@@ -166,8 +286,8 @@ export class FirestoreClient {
     }
 
     const userDocPath = `users/${uid}`;
-    const userDoc = await this.getDocument(userDocPath);
-    const currentTokens = userDoc && typeof userDoc.tokens === 'number' ? userDoc.tokens : await this.getBalance(uid);
+    const userDoc = await this.getDocument(userDocPath, txId);
+    const currentTokens = userDoc && typeof userDoc.tokens === 'number' ? userDoc.tokens : TOKEN_CONFIG.INITIAL_TOKENS;
 
     if (currentTokens < cost) {
       throw new Error(`INSUFFICIENT_TOKENS: Saldo actual (${currentTokens}) inferior al costo requerido (${cost})`);
@@ -175,10 +295,10 @@ export class FirestoreClient {
 
     const newTokens = currentTokens - cost;
     const now = new Date().toISOString();
-    const txId = `tx_reserve_${operationId}`;
+    const txRecordId = `tx_reserve_${operationId}`;
 
-    const commitUrl = `https://firestore.googleapis.com/v1/projects/${this.projectId}/databases/(default)/documents:commit`;
     const commitPayload = {
+      transaction: txId,
       writes: [
         {
           update: {
@@ -204,9 +324,9 @@ export class FirestoreClient {
         },
         {
           update: {
-            name: `projects/${this.projectId}/databases/(default)/documents/token_transactions/${txId}`,
+            name: `projects/${this.projectId}/databases/(default)/documents/token_transactions/${txRecordId}`,
             fields: toFirestoreFields({
-              transactionId: txId,
+              transactionId: txRecordId,
               uid,
               type: 'ANALYSIS_RESERVE',
               amount: -cost,
@@ -218,9 +338,11 @@ export class FirestoreClient {
       ]
     };
 
+    const headers = await this.getAuthHeaders();
+    const commitUrl = `https://firestore.googleapis.com/v1/projects/${this.projectId}/databases/(default)/documents:commit`;
     const res = await fetch(commitUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(commitPayload)
     });
 
@@ -239,6 +361,7 @@ export class FirestoreClient {
     const sessionId = `ad_sess_${crypto.randomUUID()}`;
     const now = new Date().toISOString();
 
+    const headers = await this.getAuthHeaders();
     const commitUrl = `https://firestore.googleapis.com/v1/projects/${this.projectId}/databases/(default)/documents:commit`;
     const commitPayload = {
       writes: [
@@ -258,7 +381,7 @@ export class FirestoreClient {
 
     const res = await fetch(commitUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(commitPayload)
     });
 
@@ -270,24 +393,25 @@ export class FirestoreClient {
   }
 
   /**
-   * Procesa de forma atómica e idempotente la recompensa de +2 tokens desde AdMob SSV
+   * Procesa de forma atómica e idempotente la recompensa de +2 tokens desde AdMob SSV dentro de una transacción de lectura-escritura
    */
   async processAdReward(uid: string, sessionId: string, transactionId: string, rewardAmount: number = TOKEN_CONFIG.REWARDED_AD_TOKENS): Promise<{ rewardAmount: number; newBalance: number }> {
+    const txId = await this.beginTransaction();
     const rewardPath = `ad_rewards/${transactionId}`;
-    const existingReward = await this.getDocument(rewardPath);
+    const existingReward = await this.getDocument(rewardPath, txId);
 
     if (existingReward) {
       const balance = await this.getBalance(uid);
       return { rewardAmount, newBalance: balance };
     }
 
-    const userDoc = await this.getDocument(`users/${uid}`);
-    const currentTokens = userDoc && typeof userDoc.tokens === 'number' ? userDoc.tokens : await this.getBalance(uid);
+    const userDoc = await this.getDocument(`users/${uid}`, txId);
+    const currentTokens = userDoc && typeof userDoc.tokens === 'number' ? userDoc.tokens : TOKEN_CONFIG.INITIAL_TOKENS;
     const newTokens = currentTokens + rewardAmount;
     const now = new Date().toISOString();
 
-    const commitUrl = `https://firestore.googleapis.com/v1/projects/${this.projectId}/databases/(default)/documents:commit`;
     const commitPayload = {
+      transaction: txId,
       writes: [
         {
           update: {
@@ -327,9 +451,11 @@ export class FirestoreClient {
       ]
     };
 
+    const headers = await this.getAuthHeaders();
+    const commitUrl = `https://firestore.googleapis.com/v1/projects/${this.projectId}/databases/(default)/documents:commit`;
     const res = await fetch(commitUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(commitPayload)
     });
 

@@ -25,5 +25,17 @@
     "ts-jest": "^29.2.5",
     "typescript": "^5.6.3",
     "wrangler": "^3.86.0"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "transform": {
+      "^.+\\.tsx?$": [
+        "ts-jest",
+        {
+          "useESM": false
+        }
+      ]
+    }
   }
 }

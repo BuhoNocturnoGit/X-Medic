@@ -140,7 +140,7 @@ export default {
         });
 
         const rawQueryString = url.search.substring(1);
-        const isSignatureValid = await verifyAdMobSsvSignature(queryParams, rawQueryString);
+        const isSignatureValid = await verifyAdMobSsvSignature(queryParams, rawQueryString, env);
 
         if (!isSignatureValid) {
           return jsonResponse({ error: 'Firma ECDSA de AdMob SSV inválida' }, 400);

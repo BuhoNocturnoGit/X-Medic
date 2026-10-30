@@ -20,12 +20,12 @@ sealed interface ReserveTokensResult {
 }
 
 /**
- * Repositorio Android que consume el backend seguro de tokens en Cloudflare Workers.
+ * Repositorio Android que consume el backend seguro de tokens en Cloudflare Workers (xmedic-tokens-api).
  */
 class TokenBackendRepository(context: Context) {
 
-    // URL base del backend en Cloudflare Workers (desarrollo local o producción)
-    private val backendBaseUrl = "https://xmedic-token-backend.buho.workers.dev" // o http://10.0.2.2:8787 para wrangler dev
+    // URL oficial del Worker desplegado en Cloudflare
+    private val backendBaseUrl = "https://xmedic-tokens-api.workers.dev"
 
     private suspend fun getFirebaseIdToken(): String? {
         val user = FirebaseAuth.getInstance().currentUser ?: return null
@@ -105,7 +105,7 @@ class TokenBackendRepository(context: Context) {
      * Solicita la reserva y descuento transaccional de 5 tokens antes de ejecutar un análisis médico
      */
     suspend fun reserveAnalysisTokens(operationId: String): ReserveTokensResult = withContext(Dispatchers.IO) {
-        val idToken = getFirebaseIdToken() ?: return@withContext ReserveTokensResult.Error("No hay sesión de usuario activa")
+        val idToken = getFirebaseIdToken() ?: return@withContext ReserveTokensResult.Error("No hay sesión de usuario activa en Firebase")
         return@withContext try {
             val url = URL("$backendBaseUrl/api/analysis/reserve")
             val conn = url.openConnection() as HttpURLConnection

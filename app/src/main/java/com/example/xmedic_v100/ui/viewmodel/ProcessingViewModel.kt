@@ -77,16 +77,9 @@ class ProcessingViewModel : ViewModel() {
                         return@launch
                     }
                     is ReserveTokensResult.Error -> {
-                        // Modo desarrollo / Red sin conexión con backend: Usar validación local como fallback
-                        val localTokens = userRepository.getTokenCount()
-                        if (localTokens < 5) {
-                            _uiState.value = ProcessingUiState.Error("No tienes tokens suficientes para realizar el análisis (requeridos: 5).")
-                            return@launch
-                        }
-                        if (!tokenDeducted) {
-                            userRepository.saveTokenCount(localTokens - 5)
-                            tokenDeducted = true
-                        }
+                        // Corrección 6: Sin conexión o error con el backend, NO se permite realizar el análisis médico
+                        _uiState.value = ProcessingUiState.Error("Sin conexión con el servidor de tokens. No se pudo autorizar el análisis médico: ${reserveResult.message}")
+                        return@launch
                     }
                     is ReserveTokensResult.Success -> {
                         userRepository.saveTokenCount(reserveResult.newBalance)
@@ -118,10 +111,6 @@ class ProcessingViewModel : ViewModel() {
                     }
 
                     is InferenceResult.ModelMissing -> {
-                        if (tokenDeducted) {
-                            userRepository.saveTokenCount(userRepository.getTokenCount() + 5)
-                            tokenDeducted = false
-                        }
                         _uiState.value = ProcessingUiState.ClinicalModelMissing(
                             imageUri = imageUri,
                             message = "Análisis clínico no disponible."
@@ -129,18 +118,10 @@ class ProcessingViewModel : ViewModel() {
                     }
 
                     is InferenceResult.Error -> {
-                        if (tokenDeducted) {
-                            userRepository.saveTokenCount(userRepository.getTokenCount() + 5)
-                            tokenDeducted = false
-                        }
                         _uiState.value = ProcessingUiState.Error("Error en procesamiento: ${inferenceResult.message}")
                     }
                 }
             } catch (e: Exception) {
-                if (tokenDeducted) {
-                    userRepository.saveTokenCount(userRepository.getTokenCount() + 5)
-                    tokenDeducted = false
-                }
                 _uiState.value = ProcessingUiState.Error("Excepción en procesamiento: ${e.localizedMessage}")
             } finally {
                 classifierHelper.close()

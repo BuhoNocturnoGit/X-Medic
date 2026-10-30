@@ -15,7 +15,7 @@ sealed interface UserProfileResult {
     data class Error(val exception: Exception) : UserProfileResult
 }
 
-class UserRepository(context: Context) {
+class UserRepository(private val context: Context) {
     private val prefs = context.getSharedPreferences("xmedic_user_prefs", Context.MODE_PRIVATE)
 
     fun getCurrentUser(): FirebaseUser? {
@@ -77,6 +77,17 @@ class UserRepository(context: Context) {
         val user = getCurrentUser() ?: run {
             Log.d("XMEDIC_NAV", "fetchUserProfileRemote: No hay usuario autenticado actualmente.")
             return UserProfileResult.NoRole
+        }
+
+        // Corrección 8: Solicitar la inicialización atómica e idempotente de 120 tokens en el servidor tras la autenticación
+        try {
+            val tokenBackendRepo = TokenBackendRepository(context)
+            val serverBalance = tokenBackendRepo.initializeUserTokens()
+            if (serverBalance != null) {
+                saveTokenCount(serverBalance)
+            }
+        } catch (e: Exception) {
+            Log.e("XMEDIC_NAV", "No se pudo conectar con el backend para inicializar tokens", e)
         }
 
         return try {
@@ -173,7 +184,6 @@ class UserRepository(context: Context) {
     }
 
     fun clearLocalData() {
-        // Al cerrar sesión, no borramos SharedPreferences completas si se quiere conservar caché local
         prefs.edit().remove("KEY_TEMP_CACHE").apply()
     }
 }
